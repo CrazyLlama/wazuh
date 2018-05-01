@@ -46,8 +46,8 @@ int OS_AddNewAgent(keystore *keys, const char *id, const char *name, const char 
     if (!key) {
         snprintf(str1, STR_SIZE, "%d%s%d%s", (int)time(0), name, os_random(), getuname());
         snprintf(str2, STR_SIZE, "%s%s%ld", ip, id, (long int)os_random());
-        OS_MD5_Str(str1, md1);
-        OS_MD5_Str(str2, md2);
+        OS_MD5_Str(str1, -1, md1);
+        OS_MD5_Str(str2, -1, md2);
         snprintf(buffer, KEYSIZE, "%s%s", md1, md2);
         key = buffer;
     }
@@ -159,6 +159,7 @@ int OS_RemoveAgent(const char *u_id) {
     /* Remove counter for ID */
     OS_RemoveCounter(u_id);
     OS_RemoveAgentTimestamp(u_id);
+    OS_RemoveAgentGroup(u_id);
     return 1;
 }
 
@@ -533,7 +534,7 @@ int print_agents(int print_status, int active_only, int csv_output, cJSON *json_
                     total++;
 
                     if (print_status) {
-                        int agt_status = get_agent_status(name, ip);
+                        agent_status_t agt_status = get_agent_status(name, ip);
                         if (active_only && (agt_status != GA_STATUS_ACTIVE)) {
                             continue;
                         }
@@ -668,10 +669,15 @@ void OS_BackupAgentInfo(const char *id, const char *name, const char *ip)
     snprintf(path_dst, OS_FLSIZE, "%s/rootcheck", path_backup);
     status += link(path_src, path_dst);
 
+    /* agent-group */
+    snprintf(path_src, OS_FLSIZE, "%s/%s", GROUPS_DIR, id);
+    snprintf(path_dst, OS_FLSIZE, "%s/agent-group", path_backup);
+    status += link(path_src, path_dst);
+
     if (status < 0) {
         mdebug1("Couldn't create some backup files.");
 
-        if (status == -6) {
+        if (status == -7) {
             mdebug1("Backup directory empty. Removing %s", path_backup);
             rmdir(path_backup);
         }
@@ -810,6 +816,13 @@ void OS_RemoveAgentTimestamp(const char *id)
     free(buffer);
     OS_MoveFile(file.name, TIMESTAMP_FILE);
     free(file.name);
+}
+
+void OS_RemoveAgentGroup(const char *id)
+{
+    char group_file[OS_FLSIZE + 1];
+    snprintf(group_file, OS_FLSIZE, "%s/%s", GROUPS_DIR, id);
+    unlink(group_file);
 }
 
 void FormatID(char *id) {

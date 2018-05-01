@@ -80,7 +80,7 @@ void* wm_oscap_main(wm_oscap *oscap) {
             time_sleep = oscap->state.next_time = 0;
         }
 
-        if (wm_state_io(&WM_OSCAP_CONTEXT, WM_IO_WRITE, &oscap->state, sizeof(oscap->state)) < 0)
+        if (wm_state_io(WM_OSCAP_CONTEXT.name, WM_IO_WRITE, &oscap->state, sizeof(oscap->state)) < 0)
             mterror(WM_OSCAP_LOGTAG, "Couldn't save running state.");
 
         // If time_sleep=0, yield CPU
@@ -100,7 +100,7 @@ void wm_oscap_setup(wm_oscap *_oscap) {
 
     // Read running state
 
-    if (wm_state_io(&WM_OSCAP_CONTEXT, WM_IO_READ, &oscap->state, sizeof(oscap->state)) < 0)
+    if (wm_state_io(WM_OSCAP_CONTEXT.name, WM_IO_READ, &oscap->state, sizeof(oscap->state)) < 0)
         memset(&oscap->state, 0, sizeof(oscap->state));
 
     if (isDebug())
@@ -140,9 +140,7 @@ void wm_oscap_run(wm_oscap_eval *eval) {
     wm_oscap_profile *profile;
 
     // Define time to sleep between messages sent
-
     int usec = 1000000 / wm_max_eps;
-    struct timeval timeout = {0, usec};
 
     // Create arguments
 
@@ -156,7 +154,7 @@ void wm_oscap_run(wm_oscap_eval *eval) {
         wm_strcat(&command, "--oval", ' ');
         break;
     default:
-        mterror(WM_OSCAP_LOGTAG, "Unspecified content type for file '%s'. This shouln't happen.", eval->path);
+        mterror(WM_OSCAP_LOGTAG, "Unspecified content type for file '%s'. This shouldn't happen.", eval->path);
         pthread_exit(NULL);
     }
 
@@ -222,15 +220,11 @@ void wm_oscap_run(wm_oscap_eval *eval) {
     }
 
     for (line = strtok(output, "\n"); line; line = strtok(NULL, "\n")){
-        timeout.tv_usec = usec;
-        select(0 , NULL, NULL, NULL, &timeout);
-        SendMSG(queue_fd, line, WM_OSCAP_LOCATION, WODLE_MQ);
+        wm_sendmsg(usec, queue_fd, line, WM_OSCAP_LOCATION, LOCALFILE_MQ);
     }
 
     snprintf(msg, OS_MAXSTR, "Ending OpenSCAP scan. File: %s. ", eval->path);
-    timeout.tv_usec = usec;
-    select(0 , NULL, NULL, NULL, &timeout);
-    SendMSG(queue_fd, msg, "rootcheck", ROOTCHECK_MQ);
+    wm_sendmsg(usec, queue_fd, msg, "rootcheck", ROOTCHECK_MQ);
 
     free(output);
     free(command);
@@ -259,14 +253,14 @@ void wm_oscap_check() {
     // Check if interval
 
     if (!oscap->interval)
-        oscap->interval = WM_DEF_INTERVAL;
+        oscap->interval = WM_OSCAP_DEF_INTERVAL;
 
     // Check timeout and flags for evals
 
     for (eval = oscap->evals; eval; eval = eval->next) {
         if (!eval->timeout)
             if (!(eval->timeout = oscap->timeout))
-                eval->timeout = WM_DEF_TIMEOUT;
+                eval->timeout = WM_OSCAP_DEF_TIMEOUT;
     }
 }
 

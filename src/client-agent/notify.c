@@ -22,8 +22,13 @@ static char *rand_keepalive_str2(char *dst, int size)
                                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                                "0123456789"
                                "!@#$%^&*()_+-=;'[],./?";
+    int i;
+    int len;
+
     srandom_init();
-    int i, len = os_random() % (size - 1);
+    len = os_random() % (size - 1);
+    len = len >= 0 ? len : -len;
+
     for ( i = 0; i < len; ++i ) {
         dst[i] = text[(unsigned)os_random() % (sizeof text - 1)];
     }
@@ -77,12 +82,14 @@ void run_notify()
         /* If response is not available, set lock and wait for it */
         mwarn(SERVER_UNAV);
         os_setwait();
+        update_status(GA_STATUS_NACTIVE);
 
         /* Send sync message */
         start_agent(0);
 
         minfo(SERVER_UP);
         os_delwait();
+        update_status(GA_STATUS_ACTIVE);
     }
 #endif
 
@@ -134,10 +141,10 @@ void run_notify()
 
     /* Send status message */
     mdebug2("Sending keep alive: %s", tmp_msg);
-    send_msg(0, tmp_msg);
+    send_msg(tmp_msg, -1);
 
     free(shared_files);
-
+    update_keepalive(curr_time);
     return;
 }
 #endif /* !WIN32 */

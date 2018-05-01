@@ -45,7 +45,7 @@ int Read_Labels(XML_NODE node, void *d1, __attribute__((unused)) void *d2) {
             key = NULL;
             hidden = 0;
 
-            for (j = 0; node[i]->attributes[j]; j++) {
+            for (j = 0; node[i]->attributes && node[i]->attributes[j]; j++) {
                 if (strcmp(node[i]->attributes[j], xml_key) == 0) {
                     if (strlen(node[i]->values[j]) > 0) {
                         key = node[i]->values[j];
@@ -86,4 +86,22 @@ int Read_Labels(XML_NODE node, void *d1, __attribute__((unused)) void *d2) {
 error:
     labels_free(*labels);
     return OS_INVALID;
+}
+
+int Test_Labels(const char * path) {
+    int fail = 0;
+    wlabel_t *test_labels = NULL;
+
+    if (ReadConfig(CAGENT_CONFIG | CLABELS, path, &test_labels, NULL) < 0) {
+        merror(RCONFIG_ERROR,"Labels", path);
+        fail = 1;
+    } else {
+        labels_free(test_labels);
+    }
+
+    if (fail) {
+        return -1;
+    } else {
+        return 0;
+    }
 }

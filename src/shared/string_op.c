@@ -146,3 +146,103 @@ char * w_strtrim(char * string) {
     *c = '\0';
     return string;
 }
+
+// Add a dynamic field with object nesting
+void W_JSON_AddField(cJSON *root, const char *key, const char *value) {
+    cJSON *object;
+    char *current;
+    char *nest = strchr(key, '.');
+    size_t length;
+
+    if (nest) {
+        length = nest - key;
+        current = malloc(length + 1);
+        strncpy(current, key, length);
+        current[length] = '\0';
+
+        if (object = cJSON_GetObjectItem(root, current), object) {
+            if (cJSON_IsObject(object)) {
+                W_JSON_AddField(object, nest + 1, value);
+            }
+        } else {
+            cJSON_AddItemToObject(root, current, object = cJSON_CreateObject());
+            W_JSON_AddField(object, nest + 1, value);
+        }
+
+        free(current);
+    } else if (!cJSON_GetObjectItem(root, key)) {
+        cJSON_AddStringToObject(root, key, value);
+    }
+}
+
+// Searches haystack for needle. Returns 1 if needle is found in haystack.
+
+int w_str_in_array(const char * needle, const char ** haystack) {
+    int i;
+
+    if (!(needle && haystack)) {
+        return 0;
+    }
+
+    for (i = 0; haystack[i]; i++) {
+        if (strcmp(needle, haystack[i]) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* Filter escape characters */
+
+char* filter_special_chars(const char *string) {
+    int i, j = 0;
+    int n = strlen(string);
+    char *filtered = malloc(n + 1);
+
+    if (!filtered)
+        return NULL;
+
+    for (i = 0; i <= n; i++)
+        filtered[j++] = (string[i] == '\\') ? string[++i] : string[i];
+
+    return filtered;
+}
+
+// Replace substrings
+
+char * wstr_replace(const char * string, const char * search, const char * replace) {
+    char * result;
+    const char * scur;
+    const char * snext;
+    size_t wi = 0;
+    size_t zcur;
+
+    if (!(string && search && replace)) {
+        return NULL;
+    }
+
+    const size_t ZSEARCH = strlen(search);
+    const size_t ZREPLACE = strlen(replace);
+
+    os_malloc(sizeof(char), result);
+
+    for (scur = string; snext = strstr(scur, search), snext; scur = snext + ZSEARCH) {
+        zcur = snext - scur;
+        os_realloc(result, wi + zcur + ZREPLACE + 1, result);
+        memcpy(result + wi, scur, zcur);
+        wi += zcur;
+        memcpy(result + wi, replace, ZREPLACE);
+        wi += ZREPLACE;
+    }
+
+    // Copy last chunk
+
+    zcur = strlen(scur);
+    os_realloc(result, wi + zcur + 1, result);
+    memcpy(result + wi, scur, zcur);
+    wi += zcur;
+
+    result[wi] = '\0';
+    return result;
+}

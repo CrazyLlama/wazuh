@@ -22,6 +22,8 @@
 
         wodle-openscap.template
 
+        wodle-syscollector.template
+
         syscheck.template
 
         global-ar.template
@@ -43,13 +45,15 @@
 
     <ossec_config>
         <client>
-          <server-ip>192.168.10.100</server-ip>
+          <server>
+            <address>192.168.10.100</address>
+          </server>
           <config-profile>distribution, distributionVersion</config-profile>
         </client>
         <client_buffer>
           <!-- Agent buffer options -->
-          <disable>no</disable>
-          <length>5000</length>
+          <disabled>no</disabled>
+          <queue_size>5000</queue_size>
           <events_per_second>500</events_per_second>
         </client_buffer>
 
@@ -58,6 +62,8 @@
         rootcheck.template
 
         wodle-openscap.template
+
+        wodle-syscollector.template
 
         syscheck.template
 

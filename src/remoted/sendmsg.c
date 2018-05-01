@@ -13,122 +13,104 @@
 #include "remoted.h"
 #include "os_net/os_net.h"
 
-/* pthread send_msg mutex */
-static pthread_mutex_t sendmsg_mutex;
-
 /* pthread key update mutex */
-static pthread_mutex_t keyupdate_mutex;
+static pthread_rwlock_t keyupdate_rwlock = PTHREAD_RWLOCK_INITIALIZER;
 
-
-/* Initializes mutex */
-void keyupdate_init()
+void key_lock_read()
 {
-    /* Initialize mutex */
-    pthread_mutex_init(&keyupdate_mutex, NULL);
+    w_rwlock_rdlock(&keyupdate_rwlock);
 }
 
-void key_lock()
+void key_lock_write()
 {
-    if (pthread_mutex_lock(&keyupdate_mutex) != 0) {
-        merror(MUTEX_ERROR);
-    }
+    w_rwlock_wrlock(&keyupdate_rwlock);
 }
 
 void key_unlock()
 {
-    if (pthread_mutex_unlock(&keyupdate_mutex) != 0) {
-        merror(MUTEX_ERROR);
-    }
+    w_rwlock_unlock(&keyupdate_rwlock);
 }
 
 /* Check for key updates */
 int check_keyupdate()
 {
+    int retval = 0;
+
     /* Check key for updates */
     if (!OS_CheckUpdateKeys(&keys)) {
         return (0);
     }
 
-    key_lock();
-
-    /* Lock before using */
-    if (pthread_mutex_lock(&sendmsg_mutex) != 0) {
-        key_unlock();
-        merror(MUTEX_ERROR);
-        return (0);
-    }
+    key_lock_write();
 
     if (OS_UpdateKeys(&keys)) {
-        if (pthread_mutex_unlock(&sendmsg_mutex) != 0) {
-            merror(MUTEX_ERROR);
-        }
-        key_unlock();
-        return (1);
+        retval = 1;
     }
 
-    if (pthread_mutex_unlock(&sendmsg_mutex) != 0) {
-        merror(MUTEX_ERROR);
-    }
     key_unlock();
-
-    return (0);
-}
-
-/* Initialize send_msg */
-void send_msg_init()
-{
-    /* Initialize mutex */
-    pthread_mutex_init(&sendmsg_mutex, NULL);
+    return retval;
 }
 
 /* Send message to an agent
  * Returns -1 on error
- * Must call key_lock() before this
+ * Must not call key_lock() before this
  */
-int send_msg(unsigned int agentid, const char *msg)
+int send_msg(const char *agent_id, const char *msg, ssize_t msg_length)
 {
-    ssize_t msg_size, send_b;
-    netsize_t length;
+    int key_id;
+    ssize_t msg_size;
     char crypt_msg[OS_MAXSTR + 1];
+    int retval = 0;
+
+    key_lock_read();
+    key_id = OS_IsAllowedID(&keys, agent_id);
+
+    if (key_id < 0) {
+        key_unlock();
+        merror(AR_NOAGENT_ERROR, agent_id);
+        return (-1);
+    }
 
     /* If we don't have the agent id, ignore it */
-    if (keys.keyentries[agentid]->rcvd < (time(0) - (2 * NOTIFY_TIME))) {
-        merror(SEND_DISCON, keys.keyentries[agentid]->id);
+    if (keys.keyentries[key_id]->rcvd < (time(0) - DISCON_TIME)) {
+        key_unlock();
+        merror(SEND_DISCON, keys.keyentries[key_id]->id);
         return (-1);
     }
 
-    msg_size = CreateSecMSG(&keys, msg, crypt_msg, agentid);
+    msg_size = CreateSecMSG(&keys, msg, msg_length < 0 ? strlen(msg) : (size_t)msg_length, crypt_msg, key_id);
+
     if (msg_size == 0) {
+        key_unlock();
         merror(SEC_ERROR);
-        return (-1);
-    }
-
-    /* Lock before using */
-    if (pthread_mutex_lock(&sendmsg_mutex) != 0) {
-        merror(MUTEX_ERROR);
         return (-1);
     }
 
     /* Send initial message */
     if (logr.proto[logr.position] == UDP_PROTO) {
-        send_b = sendto(logr.sock, crypt_msg, msg_size, 0,
-               (struct sockaddr *)&keys.keyentries[agentid]->peer_info,
-               logr.peer_size);
+        retval = sendto(logr.sock, crypt_msg, msg_size, 0, (struct sockaddr *)&keys.keyentries[key_id]->peer_info, logr.peer_size) == msg_size ? 0 : -1;
+    } else if (keys.keyentries[key_id]->sock >= 0) {
+        w_mutex_lock(&keys.keyentries[key_id]->mutex);
+        retval = OS_SendSecureTCP(keys.keyentries[key_id]->sock, msg_size, crypt_msg);
+        w_mutex_unlock(&keys.keyentries[key_id]->mutex);
     } else {
-        length = msg_size;
-        send(keys.keyentries[agentid]->sock, (char*)&length, sizeof(length), 0);
-        send_b = send(keys.keyentries[agentid]->sock, crypt_msg, msg_size, 0);
+        key_unlock();
+        mdebug1("Send operation cancelled due to closed socket.");
+        return -1;
     }
 
-    if (send_b < 0) {
-        merror(SEND_ERROR, keys.keyentries[agentid]->id);
+    key_unlock();
+
+    if (retval < 0) {
+        switch (errno) {
+        case EPIPE:
+        case EBADF:
+            mdebug1(SEND_ERROR ". Agent might got disconnected.", agent_id, strerror(errno));
+            break;
+        default:
+            merror(SEND_ERROR, agent_id, strerror(errno));
+        }
     }
 
-    /* Unlock mutex */
-    if (pthread_mutex_unlock(&sendmsg_mutex) != 0) {
-        merror(MUTEX_ERROR);
-        return (-1);
-    }
-
-    return (0);
+    return retval;
 }

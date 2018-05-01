@@ -43,6 +43,7 @@
 
 #ifndef WIN32
 #include <sys/wait.h>
+#include <sys/resource.h>
 
 // Only Linux and FreeBSD need mount.h */
 #if defined(Linux) || defined(FreeBSD)
@@ -91,6 +92,7 @@
 
 #include <time.h>
 #include <errno.h>
+#include <libgen.h>
 
 #include "defs.h"
 #include "help.h"
@@ -106,8 +108,6 @@
 #endif
 
 /* Global portability code */
-
-typedef int32_t netsize_t;
 
 #ifdef SOLARIS
 #include <limits.h>
@@ -147,8 +147,9 @@ typedef int socklen_t;
 #define lstat(x,y) stat(x,y)
 #define CloseSocket(x) closesocket(x)
 void WinSetError();
-typedef unsigned short int u_int16_t;
-typedef unsigned char u_int8_t;
+typedef uint32_t u_int32_t;
+typedef uint16_t u_int16_t;
+typedef uint8_t u_int8_t;
 
 #define MSG_DONTWAIT    0
 
@@ -199,6 +200,7 @@ extern const char *__local_name;
 #include "list_op.h"
 #include "dirtree_op.h"
 #include "hash_op.h"
+#include "queue_op.h"
 #include "store_op.h"
 #include "rc.h"
 #include "ar.h"
@@ -210,11 +212,14 @@ extern const char *__local_name;
 #include "string_op.h"
 #include "randombytes.h"
 #include "labels_op.h"
+#include "time_op.h"
 
 #include "os_xml/os_xml.h"
 #include "os_regex/os_regex.h"
 
 #include "error_messages/error_messages.h"
+#include "error_messages/debug_messages.h"
 #include "custom_output_search.h"
+#include "url.h"
 
 #endif /* __SHARED_H */

@@ -36,8 +36,6 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
     } else
         minfo("Version detected -> %s", getuname());
 
-
-
     /* Set group ID */
     if (Privsep_SetGroup(gid) < 0) {
         merror_exit(SETGID_ERROR, group, errno, strerror(errno));
@@ -53,10 +51,21 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
         merror_exit(SETUID_ERROR, user, errno, strerror(errno));
     }
 
+    /* Try to connect to server */
+    os_setwait();
+
     /* Create the queue and read from it. Exit if fails. */
     if ((agt->m_queue = StartMQ(DEFAULTQUEUE, READ)) < 0) {
         merror_exit(QUEUE_ERROR, DEFAULTQUEUE, strerror(errno));
     }
+
+#ifdef HPUX
+    {
+        int flags;
+        flags = fcntl(agt->m_queue, F_GETFL, 0);
+        fcntl(agt->m_queue, F_SETFL, flags | O_NONBLOCK);
+    }
+#endif
 
     maxfd = agt->m_queue;
     agt->sock = -1;
@@ -69,11 +78,14 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
     /* Read private keys  */
     minfo(ENC_READ);
 
-    OS_ReadKeys(&keys, 1, 0);
+    OS_ReadKeys(&keys, 1, 0, 0);
     OS_StartCounter(&keys);
 
     os_write_agent_info(keys.keyentries[0]->name, NULL, keys.keyentries[0]->id,
                         agt->profile);
+
+    /*Set the crypto method for the agent */
+    os_set_agent_crypto_method(&keys,agt->crypto_method);
 
     /* Start up message */
     minfo(STARTUP_MSG, (int)getpid());
@@ -85,7 +97,7 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
 
     /* Launch rotation thread */
 
-    if (CreateThread(w_rotate_log_thread, (void *)NULL) != 0) {
+    if (getDefine_Int("monitord", "rotate_log", 0, 1) && CreateThread(w_rotate_log_thread, (void *)NULL) != 0) {
         merror_exit(THREAD_ERROR);
     }
 
@@ -103,9 +115,11 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
     /* Connect remote */
     rc = 0;
     while (rc < agt->rip_id) {
-        minfo("Server IP Address: %s", agt->rip[rc]);
+        minfo("Server IP Address: %s", agt->server[rc].rip);
         rc++;
     }
+
+    w_create_thread(state_main, NULL);
 
     /* Try to connect to the server */
     if (!connect_server(0)) {
@@ -126,16 +140,18 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
         }
     }
 
-    /* Try to connect to server */
-    os_setwait();
-
     start_agent(1);
 
     os_delwait();
+    update_status(GA_STATUS_ACTIVE);
 
     /* Send integrity message for agent configs */
     intcheck_file(OSSECCONF, dir);
     intcheck_file(OSSEC_DEFINES, dir);
+
+    // Start request module
+    req_init();
+    w_create_thread(req_receiver, NULL);
 
     /* Send first notification */
     run_notify();
@@ -172,8 +188,13 @@ void AgentdStart(const char *dir, int uid, int gid, const char *user, const char
         /* For the receiver */
         if (FD_ISSET(agt->sock, &fdset)) {
             if (receive_msg() < 0) {
+                update_status(GA_STATUS_NACTIVE);
                 merror(LOST_ERROR);
+                os_setwait();
                 start_agent(0);
+                minfo(SERVER_UP);
+                os_delwait();
+                update_status(GA_STATUS_ACTIVE);
             }
         }
 

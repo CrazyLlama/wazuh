@@ -18,9 +18,11 @@ int loop_timeout;
 int logr_queue;
 int open_file_attempts;
 logreader *logff;
+logsocket *logsk;
 int vcheck_files;
 int maximum_lines;
 static int _cday = 0;
+logsocket default_agent = { .name = "agent" };
 
 
 static char *rand_keepalive_str(char *dst, int size)
@@ -29,8 +31,11 @@ static char *rand_keepalive_str(char *dst, int size)
                                "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                                "0123456789"
                                "!@#$%^&*()_+-=;'[],./?";
+    int i;
+    int len;
     srandom_init();
-    int i, len = os_random() % (size - 10);
+    len = os_random() % (size - 10);
+    len = len >= 0 ? len : -len;
 
     strncpy(dst, "--MARK--: ", 12);
     for ( i = 10; i < len; ++i ) {
@@ -43,7 +48,7 @@ static char *rand_keepalive_str(char *dst, int size)
 /* Handle file management */
 void LogCollectorStart()
 {
-    int i = 0, r = 0;
+    int i = 0, r = 0, tg;
     int max_file = 0;
     int f_check = 0;
     time_t curr_time = 0;
@@ -70,24 +75,12 @@ void LogCollectorStart()
 
     /* Initialize each file and structure */
     for (i = 0;; i++) {
+        if (logff[i].duplicated) {
+            continue;
+        }
+
         if (logff[i].file == NULL) {
             break;
-        }
-
-        /* Remove duplicate entries */
-        for (r = 0; r < i; r++) {
-            if (logff[r].file && strcmp(logff[i].file, logff[r].file) == 0) {
-                mwarn("Duplicated log file given: '%s'.", logff[i].file);
-                logff[i].file = NULL;
-                logff[i].command = NULL;
-                logff[i].fp = NULL;
-
-                break;
-            }
-        }
-
-        if (logff[i].file == NULL) {
-            /* Do nothing, duplicated entry */
         }
 
         else if (strcmp(logff[i].logformat, "eventlog") == 0) {
@@ -128,6 +121,13 @@ void LogCollectorStart()
                 logff[i].read = read_command;
 
                 minfo("Monitoring output of command(%d): %s", logff[i].ign, logff[i].command);
+                tg = 0;
+                if (logff[i].target){
+                    while (logff[i].target[tg]) {
+                        mdebug1("Socket target for '%s' -> %s", logff[i].command, logff[i].target[tg]);
+                        tg++;
+                    }
+                }
 
                 if (!logff[i].alias) {
                     os_strdup(logff[i].command, logff[i].alias);
@@ -143,6 +143,13 @@ void LogCollectorStart()
                 logff[i].read = read_fullcommand;
 
                 minfo("Monitoring full output of command(%d): %s", logff[i].ign, logff[i].command);
+                tg = 0;
+                if (logff[i].target){
+                    while (logff[i].target[tg]) {
+                        mdebug1("Socket target for '%s' -> %s", logff[i].command, logff[i].target[tg]);
+                        tg++;
+                    }
+                }
 
                 if (!logff[i].alias) {
                     os_strdup(logff[i].command, logff[i].alias);
@@ -170,6 +177,13 @@ void LogCollectorStart()
             }
 
             minfo(READING_FILE, logff[i].file);
+            tg = 0;
+            if (logff[i].target){
+                while (logff[i].target[tg]) {
+                    mdebug1("Socket target for '%s' -> %s", logff[i].file, logff[i].target[tg]);
+                    tg++;
+                }
+            }
 
             /* Get the log type */
             if (strcmp("snort-full", logff[i].logformat) == 0) {
@@ -182,6 +196,8 @@ void LogCollectorStart()
 #endif
             else if (strcmp("nmapg", logff[i].logformat) == 0) {
                 logff[i].read = read_nmapg;
+            } else if (strcmp("json", logff[i].logformat) == 0) {
+                logff[i].read = read_json;
             } else if (strcmp("mysql_log", logff[i].logformat) == 0) {
                 logff[i].read = read_mysql_log;
             } else if (strcmp("mssql_log", logff[i].logformat) == 0) {
@@ -594,7 +610,7 @@ int update_fname(int i)
 int handle_file(int i, int do_fseek, int do_log)
 {
     int fd;
-    struct stat stat_fd;
+    struct stat stat_fd = { .st_mode = 0 };
 
     /* We must be able to open the file, fseek and get the
      * time of change from it.
@@ -629,7 +645,8 @@ int handle_file(int i, int do_fseek, int do_log)
                             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (logff[i].h == INVALID_HANDLE_VALUE) {
         if (do_log == 1) {
-            merror(FOPEN_ERROR, logff[i].file, errno, strerror(errno));
+            DWORD error = GetLastError();
+            merror(FOPEN_ERROR, logff[i].file, (int)error, win_strerror(error));
         }
         return (-1);
     }

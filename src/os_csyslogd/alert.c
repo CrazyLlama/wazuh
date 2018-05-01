@@ -113,6 +113,12 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         field_add_string(syslog_msg, OS_SIZE_2048, " Current MD5: %s;", al_data->new_md5 );
         field_add_string(syslog_msg, OS_SIZE_2048, " Previous SHA1: %s;", al_data->old_sha1 );
         field_add_string(syslog_msg, OS_SIZE_2048, " Current SHA1: %s;", al_data->new_sha1 );
+        if(al_data->old_sha256){
+            field_add_string(syslog_msg, OS_SIZE_2048, " Previous SHA256: %s;", al_data->old_sha256 );
+        }
+        if(al_data->new_sha256){
+            field_add_string(syslog_msg, OS_SIZE_2048, " Current SHA256: %s;", al_data->new_sha256 );
+        }
      /* "9/19/2016 - Sivakumar Nellurandi - parsing additions" */
         field_add_string(syslog_msg, OS_SIZE_2048, " Size changed: from %s;", al_data->file_size );
         field_add_string(syslog_msg, OS_SIZE_2048, " User ownership: was %s;", al_data->owner_chg );
@@ -122,7 +128,7 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         field_add_truncated(syslog_msg, OS_SIZE_2048, " %s", al_data->log[0], 2 );
     } else if (syslog_config->format == CEF_CSYSLOG) {
         snprintf(syslog_msg, OS_SIZE_2048,
-                 "<%u>%s CEF:0|%s|%s|%s|%u|%s|%u|dvc=%s cs2=%s cs2Label=Location",
+                 "<%u>%s CEF:0|%s|%s|%s|%u|%s|%u|dvc=%s cs1=%s cs1Label=Location",
                  syslog_config->priority,
                  tstamp,
                  __author,
@@ -142,15 +148,15 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         field_add_string(syslog_msg, OS_SIZE_2048, " suser=%s", al_data->user );
         field_add_string(syslog_msg, OS_SIZE_2048, " dst=%s", al_data->dstip );
 #ifdef LIBGEOIP_ENABLED
-        field_add_string(syslog_msg, OS_SIZE_2048, " cs3Label=SrcCity cs3=%s", al_data->srcgeoip );
-        field_add_string(syslog_msg, OS_SIZE_2048, " cs4Label=DstCity cs4=%s", al_data->dstgeoip );
+        field_add_string(syslog_msg, OS_SIZE_2048, " cs4Label=SrcCity cs4=%s", al_data->srcgeoip );
+        field_add_string(syslog_msg, OS_SIZE_2048, " cs5Label=DstCity cs5=%s", al_data->dstgeoip );
 #endif
         field_add_string(syslog_msg, OS_SIZE_2048, " suser=%s", al_data->user );
         field_add_string(syslog_msg, OS_SIZE_2048, " dst=%s", al_data->dstip );
         field_add_truncated(syslog_msg, OS_SIZE_2048, " msg=%s", al_data->log[0], 2 );
         if (al_data->new_md5 && al_data->new_sha1) {
-            field_add_string(syslog_msg, OS_SIZE_2048, " cs1Label=OldMD5 cs1=%s", al_data->old_md5);
-            field_add_string(syslog_msg, OS_SIZE_2048, " cs2Label=NewMDG cs2=%s", al_data->new_md5);
+            field_add_string(syslog_msg, OS_SIZE_2048, " cs2Label=OldMD5 cs2=%s", al_data->old_md5);
+            field_add_string(syslog_msg, OS_SIZE_2048, " cs3Label=NewMD5 cs3=%s", al_data->new_md5);
             field_add_string(syslog_msg, OS_SIZE_2048, " oldFileHash=%s", al_data->old_sha1 );
             field_add_string(syslog_msg, OS_SIZE_2048, " fhash=%s", al_data->new_sha1 );
             field_add_string(syslog_msg, OS_SIZE_2048, " fileHash=%s", al_data->new_sha1 );
@@ -209,6 +215,12 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         }
         if (al_data->new_sha1) {
             cJSON_AddStringToObject(root,   "sha1_new",   al_data->new_sha1);
+        }
+        if (al_data->old_sha256) {
+            cJSON_AddStringToObject(root,   "sha256_old",   al_data->old_sha256);
+        }
+        if (al_data->new_sha256) {
+            cJSON_AddStringToObject(root,   "sha256_new",   al_data->new_sha256);
         }
 #ifdef LIBGEOIP_ENABLED
         if (al_data->srcgeoip) {
@@ -269,6 +281,12 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         field_add_string(syslog_msg, OS_SIZE_2048, " md5_new=\"%s\",", al_data->new_md5 );
         field_add_string(syslog_msg, OS_SIZE_2048, " sha1_old=\"%s\",", al_data->old_sha1 );
         field_add_string(syslog_msg, OS_SIZE_2048, " sha1_new=\"%s\",", al_data->new_sha1 );
+        if(al_data->old_sha256){
+            field_add_string(syslog_msg, OS_SIZE_2048, " sha256_old=\"%s\",", al_data->old_sha256 );
+        }
+        if(al_data->new_sha256){
+            field_add_string(syslog_msg, OS_SIZE_2048, " sha256_new=\"%s\",", al_data->new_sha256 );
+        }   
         /* Message */
         field_add_truncated(syslog_msg, OS_SIZE_2048, " message=\"%s\"", al_data->log[0], 2 );
     }
@@ -281,13 +299,29 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
  * Returns 1 on success or 0 on error
  */
 int OS_Alert_SendSyslog_JSON(cJSON *json_data, const SyslogConfig *syslog_config) {
-    cJSON * rule = cJSON_GetObjectItem(json_data, "rule");
+    cJSON * rule;
+    cJSON * timestamp;
     cJSON * groups;
     cJSON * item;
     char * string;
     int i;
+    char msg[OS_MAXSTR];
+    struct tm tm;
+    time_t now;
+    char * end;
+    char strtime[64];
 
     mdebug2("OS_Alert_SendSyslog_JSON()");
+
+    if (rule = cJSON_GetObjectItem(json_data, "rule"), !rule) {
+        merror("Alert with no rule field.");
+        return 0;
+    }
+
+    if (timestamp = cJSON_GetObjectItem(json_data, "timestamp"), !timestamp) {
+        merror("Alert with no timestamp field.");
+        return 0;
+    }
 
     /* Look if location is set */
 
@@ -325,7 +359,7 @@ int OS_Alert_SendSyslog_JSON(cJSON *json_data, const SyslogConfig *syslog_config
     if (syslog_config->group) {
         int found = 0;
 
-        if (!(rule && (groups = cJSON_GetObjectItem(json_data, "groups"), groups))) {
+        if (!(rule && (groups = cJSON_GetObjectItem(rule, "groups"), groups))) {
             return 0;
         }
 
@@ -344,8 +378,35 @@ int OS_Alert_SendSyslog_JSON(cJSON *json_data, const SyslogConfig *syslog_config
     }
 
     string = cJSON_PrintUnformatted(json_data);
-    mdebug2("OS_Alert_SendSyslog_JSON(): sending '%s'", string);
-    OS_SendUDPbySize(syslog_config->socket, strlen(string), string);
+
+    now = time(NULL);
+    localtime_r(&now, &tm);
+
+    if (end = strptime(timestamp->valuestring, "%FT%T%z", &tm), !end || *end) {
+        merror("Could not parse timestamp '%s'.", timestamp->valuestring);
+    }
+
+    strftime(strtime, sizeof(strtime), "%b %d %T", &tm);
+
+    // Space-padding instead of zero-padding
+    if (strtime[4] == '0') {
+        strtime[4] = ' ';
+    }
+
+    /* Create the syslog message */
+    snprintf(msg, OS_SIZE_2048,
+             "<%u>%s %s ossec: %s",
+
+             /* syslog header */
+             syslog_config->priority, strtime, syslog_config->use_fqdn ? __shost_long : __shost,
+
+             /* JSON Encoded Data */
+             string
+            );
+
+    mdebug2("OS_Alert_SendSyslog_JSON(): sending '%s'", msg);
+    OS_SendUDPbySize(syslog_config->socket, strlen(msg), msg);
     free(string);
+
     return 1;
 }

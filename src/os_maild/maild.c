@@ -128,9 +128,9 @@ int main(int argc, char **argv)
                                          "strict_checking",
                                          0, 1);
 
-    /* Get groupping */
-    mail.groupping = getDefine_Int("maild",
-                                   "groupping",
+    /* Get grouping */
+    mail.grouping = getDefine_Int("maild",
+                                   "grouping",
                                    0, 1);
 
     /* Get subject type */
@@ -229,7 +229,11 @@ static void OS_Run(MailConfig *mail)
     case MAIL_SOURCE_JSON:
         minfo("Getting alerts in JSON format.");
         jqueue_init(fileq);
-        jqueue_open(fileq);
+
+        if (jqueue_open(fileq, 1) < 0) {
+            merror("Could not open JSON alerts file.");
+        }
+
         break;
 
     default:
@@ -283,7 +287,7 @@ static void OS_Run(MailConfig *mail)
             /* Get more messages */
         }
 
-        /* Hour changed: send all supressed mails */
+        /* Hour changed: send all suppressed mails */
         else if (((mailtosend < mail->maxperhour) && (mailtosend != 0)) ||
                  ((p->tm_hour != thishour) && (childcount < MAXCHILDPROCESS))) {
             MailNode *mailmsg;
@@ -379,7 +383,7 @@ snd_check_hour:
             }
 
             /* Change timeout to see if any new message is coming shortly */
-            if (mail->groupping) {
+            if (mail->grouping) {
                 /* If priority is set, send email now */
                 if (mail->priority) {
                     mail_timeout = DEFAULT_TIMEOUT;

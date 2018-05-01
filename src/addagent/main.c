@@ -10,7 +10,7 @@
 #include "manage_agents.h"
 #include <stdlib.h>
 
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(__hppa__)
 static int setenv(const char *name, const char *val, __attribute__((unused)) int overwrite)
 {
     int len = strlen(name) + strlen(val) + 2;
@@ -29,6 +29,7 @@ __attribute__((noreturn)) static void helpmsg()
     print_out("    -h          This help message.");
     print_out("    -j          Use JSON output.");
     print_out("    -l          List available agents.");
+    print_out("    -L          Disable agents limit.");
     print_out("    -a <ip>     Add new agent.");
     print_out("    -n <name>   Name for new agent.");
     print_out("    -e <id>     Extracts key for an agent (Manager only).");
@@ -58,22 +59,19 @@ static void print_banner()
 /* Clean shutdown on kill */
 __attribute__((noreturn)) void manage_shutdown(__attribute__((unused)) int sig)
 {
-    /* Checking if restart message is necessary */
-    if (restart_necessary) {
-        printf(MUST_RESTART);
-    } else {
-        printf("\n");
-    }
+    printf("\n");
     printf(EXIT);
 
     exit(0);
 }
 #endif
 
+char shost[512];
+
 int main(int argc, char **argv)
 {
     char *user_msg;
-    int c = 0, cmdlist = 0, json_output = 0;
+    int c = 0, cmdlist = 0, json_output = 0, no_limit = 0;
     int force_antiquity;
     char *end;
     const char *cmdexport = NULL;
@@ -93,7 +91,7 @@ int main(int argc, char **argv)
     /* Set the name */
     OS_SetName(ARGV0);
 
-    while ((c = getopt(argc, argv, "Vhle:r:i:f:ja:n:F:")) != -1) {
+    while ((c = getopt(argc, argv, "Vhle:r:i:f:ja:n:F:L")) != -1) {
         switch (c) {
             case 'V':
                 print_version();
@@ -175,6 +173,9 @@ int main(int argc, char **argv)
 
                 setenv("OSSEC_REMOVE_DUPLICATED", optarg, 1);
                 break;
+            case 'L':
+                no_limit = 1;
+                break;
             default:
                 helpmsg();
                 break;
@@ -183,13 +184,17 @@ int main(int argc, char **argv)
 
     /* Get current time */
     time1 = time(0);
-    restart_necessary = 0;
 
     /* Before chroot */
     srandom_init();
     getuname();
 
 #ifndef WIN32
+    if (gethostname(shost, sizeof(shost) - 1) < 0) {
+        strncpy(shost, "localhost", sizeof(shost) - 1);
+        shost[sizeof(shost) - 1] = '\0';
+    }
+
     /* Get the group name */
     gid = Privsep_GetGroup(group);
     if (gid == (gid_t) - 1) {
@@ -292,7 +297,7 @@ int main(int argc, char **argv)
                 printf("\n ** Agent adding only available on a master ** \n\n");
                 break;
 #endif
-                add_agent(json_output);
+                add_agent(json_output, no_limit);
                 break;
             case 'e':
             case 'E':
@@ -342,12 +347,7 @@ int main(int argc, char **argv)
     }
 
     if (!json_output) {
-        if (restart_necessary) {
-            printf(MUST_RESTART);
-        } else {
-            printf("\n");
-        }
-
+        printf("\n");
         printf(EXIT);
     }
 

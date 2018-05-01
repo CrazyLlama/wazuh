@@ -9,8 +9,6 @@
  * Foundation.
  */
 
-#ifdef LIBOPENSSL_ENABLED
-
 #include "shared.h"
 #include "auth.h"
 #include "config/config.h"
@@ -19,6 +17,7 @@
 int authd_read_config(const char *path) {
     config.port = DEFAULT_PORT;
     config.force_time = -1;
+    config.flags.register_limit = 1;
 
     mdebug2("Reading configuration '%s'", path);
 
@@ -30,7 +29,9 @@ int authd_read_config(const char *path) {
         config.force_time = -1;
     }
 
+    if (!config.ciphers) {
+        config.ciphers = strdup(DEFAULT_CIPHERS);
+    }
+
     return 0;
 }
-
-#endif

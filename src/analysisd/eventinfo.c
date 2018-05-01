@@ -49,7 +49,7 @@ Eventinfo *Search_LastSids(Eventinfo *my_lf, RuleInfo *rule)
         lf = (Eventinfo *)lf_node->data;
 
         /* If time is outside the timeframe, return */
-        if ((c_time - lf->time) > rule->timeframe) {
+        if ((c_time - lf->time.tv_sec) > rule->timeframe) {
             return (NULL);
         }
 
@@ -134,11 +134,12 @@ Eventinfo *Search_LastSids(Eventinfo *my_lf, RuleInfo *rule)
                 if ((!lf->srcgeoip) || (!my_lf->srcgeoip)) {
                     continue;
                 }
-
                 if (strcmp(lf->srcgeoip, my_lf->srcgeoip) == 0) {
                     continue;
                 }
             }
+
+
         }
 
         /* We avoid multiple triggers for the same rule
@@ -147,7 +148,6 @@ Eventinfo *Search_LastSids(Eventinfo *my_lf, RuleInfo *rule)
         else if (lf->matched >= rule->level) {
             return (NULL);
         }
-
 
         /* Check if the number of matches worked */
         if (rule->__frequency <= 10) {
@@ -202,7 +202,7 @@ Eventinfo *Search_LastGroups(Eventinfo *my_lf, RuleInfo *rule)
         lf = (Eventinfo *)lf_node->data;
 
         /* If time is outside the timeframe, return */
-        if ((c_time - lf->time) > rule->timeframe) {
+        if ((c_time - lf->time.tv_sec) > rule->timeframe) {
             return (NULL);
         }
 
@@ -293,13 +293,13 @@ Eventinfo *Search_LastGroups(Eventinfo *my_lf, RuleInfo *rule)
                 }
             }
         }
-
         /* We avoid multiple triggers for the same rule
          * or rules with a lower level.
          */
         else if (lf->matched >= rule->level) {
             return (NULL);
         }
+
 
         /* Check if the number of matches worked */
         if (rule->__frequency < rule->frequency) {
@@ -349,7 +349,7 @@ Eventinfo *Search_LastEvents(Eventinfo *my_lf, RuleInfo *rule)
         lf = eventnode_pt->event;
 
         /* If time is outside the timeframe, return */
-        if ((c_time - lf->time) > rule->timeframe) {
+        if ((c_time - lf->time.tv_sec) > rule->timeframe) {
             return (NULL);
         }
 
@@ -412,7 +412,6 @@ Eventinfo *Search_LastEvents(Eventinfo *my_lf, RuleInfo *rule)
 
         /* Check for different from same srcgeoip */
         if (rule->context_opts & DIFFERENT_SRCGEOIP) {
-
             if ((!lf->srcgeoip) || (!my_lf->srcgeoip)) {
                 continue;
             }
@@ -458,11 +457,14 @@ void Zero_Eventinfo(Eventinfo *lf)
 {
     lf->log = NULL;
     lf->full_log = NULL;
+    lf->log_after_parent = NULL;
+    lf->log_after_prematch = NULL;
     lf->agent_id = NULL;
     lf->hostname = NULL;
     lf->program_name = NULL;
     lf->location = NULL;
     lf->comment = NULL;
+    lf->dec_timestamp = NULL;
 
     lf->srcip = NULL;
     lf->srcgeoip = NULL;
@@ -491,7 +493,8 @@ void Zero_Eventinfo(Eventinfo *lf)
 
     lf->nfields = 0;
 
-    lf->time = 0;
+    lf->time.tv_sec = 0;
+    lf->time.tv_nsec = 0;
     lf->matched = 0;
 
     lf->year = 0;
@@ -510,6 +513,8 @@ void Zero_Eventinfo(Eventinfo *lf)
     lf->md5_after = NULL;
     lf->sha1_before = NULL;
     lf->sha1_after = NULL;
+    lf->sha256_before = NULL;
+    lf->sha256_after = NULL;
     lf->size_before = NULL;
     lf->size_after = NULL;
     lf->owner_before = NULL;
@@ -612,8 +617,10 @@ void Free_Eventinfo(Eventinfo *lf)
 
     if (lf->fields) {
         int i;
-        for (i = 0; i < lf->nfields; i++)
+        for (i = 0; i < lf->nfields; i++) {
+            free(lf->fields[i].key);
             free(lf->fields[i].value);
+        }
 
         free(lf->fields);
     }
@@ -632,6 +639,12 @@ void Free_Eventinfo(Eventinfo *lf)
     }
     if (lf->sha1_after) {
         free(lf->sha1_after);
+    }
+    if (lf->sha256_before) {
+        free(lf->sha256_before);
+    }
+    if (lf->sha256_after) {
+        free(lf->sha256_after);
     }
     if (lf->size_before) {
         free(lf->size_before);
@@ -705,6 +718,7 @@ char* ParseRuleComment(Eventinfo *lf) {
     strncpy(orig, lf->generated_rule->comment, OS_COMMENT_MAX);
 
     for (str = orig; (tok = strstr(str, "$(")); str = end) {
+        field = NULL;
         *tok = '\0';
         var = tok + 2;
 
@@ -722,21 +736,52 @@ char* ParseRuleComment(Eventinfo *lf) {
 
         *(end++) = '\0';
 
-        if ((field = FindField(lf, var))) {
+        // Find static fields
+
+        if (strcmp(var, "dstuser") == 0) {
+            field = lf->dstuser;
+        } else if (strcmp(var, "srcuser") == 0) {
+            field = lf->srcuser;
+        } else if (strcmp(var, "srcip") == 0) {
+            field = lf->srcip;
+        } else if (strcmp(var, "dstip") == 0) {
+            field = lf->dstip;
+#ifdef LIBGEOIP_ENABLED
+        } else if (strcmp(var, "srcgeoip") == 0) {
+            field = lf->srcgeoip;
+        } else if (strcmp(var, "dstuser") == 0) {
+            field = lf->dstgeoip;
+#endif
+        } else if (strcmp(var, "srcport") == 0) {
+            field = lf->srcport;
+        } else if (strcmp(var, "protocol") == 0) {
+            field = lf->protocol;
+        } else if (strcmp(var, "action") == 0) {
+            field = lf->action;
+        } else if (strcmp(var, "id") == 0) {
+            field = lf->id;
+        } else if (strcmp(var, "url") == 0) {
+            field = lf->url;
+        } else if (strcmp(var, "data") == 0 || strcmp(var, "extra_data") == 0) {
+            field = lf->data;
+        } else if (strcmp(var, "status") == 0) {
+            field = lf->status;
+        } else if (strcmp(var, "system_name") == 0) {
+            field = lf->systemname;
+        }
+
+        // Find dynamic fields
+
+        else {
+            field = FindField(lf, var);
+        }
+
+        if (field) {
             if (n + (z = strlen(field)) >= OS_COMMENT_MAX)
                 return strdup(lf->generated_rule->comment);
 
             strncpy(&final[n], field, z);
             n += z;
-        } else {
-            *tok = '$';
-
-            if (n + (z = strlen(tok)) + 1 >= OS_COMMENT_MAX)
-                return strdup(lf->generated_rule->comment);
-
-            strncpy(&final[n], tok, z);
-            n += z;
-            final[n++] = ')';
         }
     }
 

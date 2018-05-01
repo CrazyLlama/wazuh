@@ -69,7 +69,7 @@ CREATE TABLE data
     (
     id              INT8        NOT NULL,
     server_id       INT4        NOT NULL,
-    "user"          TEXT        NOT NULL,
+    "user"          TEXT,
     full_log        TEXT        NOT NULL,
     PRIMARY KEY  (id, server_id)
     );
@@ -82,8 +82,8 @@ CREATE TABLE alert
     level           INT2,
     timestamp       INT8        NOT NULL,
     location_id     INT4        NOT NULL,
-    src_ip          INT8,
-    dst_ip          INT8,
+    src_ip          TEXT,
+    dst_ip          TEXT,
     src_port        INT4,
     dst_port        INT4,
     alertid         TEXT        DEFAULT NULL,

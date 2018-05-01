@@ -7,9 +7,7 @@
  * Foundation
  */
 
-#include "agent_op.h"
 #include "shared.h"
-
 
 /* Check if syscheck is to be executed/restarted
  * Returns 1 on success or 0 on failure (shouldn't be executed now)
@@ -241,4 +239,117 @@ int os_write_agent_info(const char *agent_name, __attribute__((unused)) const ch
     );
     fclose(fp);
     return (1);
+}
+
+/* Read group. Returns 0 on success or -1 on failure. */
+int get_agent_group(const char *id, char *group, size_t size) {
+    char path[PATH_MAX];
+    int result = 0;
+    FILE *fp;
+
+    if (snprintf(path, PATH_MAX, isChroot() ? GROUPS_DIR "/%s" : DEFAULTDIR GROUPS_DIR "/%s", id) >= PATH_MAX) {
+        merror("At get_agent_group(): file path too large for agent '%s'.", id);
+        return -1;
+    }
+
+    if (!(fp = fopen(path, "r"))) {
+        mdebug2("At get_agent_group(): file '%s' not found.", path);
+        return -1;
+    }
+
+    if (fgets(group, size, fp)) {
+        char *endl = strchr(group, '\n');
+
+        if (endl) {
+            *endl = '\0';
+        }
+    } else {
+        mwarn("Empty group for agent ID '%s'.", id);
+        result = -1;
+    }
+
+    fclose(fp);
+    return result;
+}
+
+/* Set agent group. Returns 0 on success or -1 on failure. */
+int set_agent_group(const char * id, const char * group) {
+    char path[PATH_MAX];
+    FILE *fp;
+    mode_t oldmask;
+
+    if (snprintf(path, PATH_MAX, isChroot() ? GROUPS_DIR "/%s" : DEFAULTDIR GROUPS_DIR "/%s", id) >= PATH_MAX) {
+        merror("At set_agent_group(): file path too large for agent '%s'.", id);
+        return -1;
+    }
+
+    oldmask = umask(0006);
+    fp = fopen(path, "w");
+    umask(oldmask);
+
+    if (!fp) {
+        merror("At set_agent_group(): open(%s): %s", path, strerror(errno));
+        return -1;
+    }
+
+    fprintf(fp, "%s\n", group);
+    fclose(fp);
+    return 0;
+}
+
+/*
+ * Parse manager hostname from agent-info file.
+ * If no such file, returns NULL.
+ */
+
+char* hostname_parse(const char *path) {
+    char buffer[OS_MAXSTR];
+    char *key;
+    char *value;
+    char *end;
+    char *manager_hostname;
+    FILE *fp;
+
+    if (!(fp = fopen(path, "r"))) {
+        if (errno == ENOENT) {
+            mdebug1(FOPEN_ERROR, path, errno, strerror(errno));
+        } else {
+            merror(FOPEN_ERROR, path, errno, strerror(errno));
+        }
+
+        return NULL;
+    }
+
+    os_calloc(OS_MAXSTR, sizeof(char), manager_hostname);
+
+    while (fgets(buffer, OS_MAXSTR, fp)) {
+        switch (*buffer) {
+        case '#':
+            if (buffer[1] == '\"') {
+                key = buffer + 2;
+            } else {
+                continue;
+            }
+
+            break;
+        default:
+            continue;
+        }
+
+        if (!(value = strstr(key, "\":"))) {
+            continue;
+        }
+
+        *value = '\0';
+        value += 2;
+
+        if (!(end = strchr(value, '\n'))) {
+            continue;
+        }
+
+        snprintf(manager_hostname, OS_MAXSTR - 1, "%s", value);
+    }
+
+    fclose(fp);
+    return manager_hostname;
 }

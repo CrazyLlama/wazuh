@@ -18,8 +18,9 @@
 void *AR_Forward(__attribute__((unused)) void *arg)
 {
     int arq = 0;
-    int agent_id = 0;
+    int key_id = 0;
     int ar_location = 0;
+    const char * path = isChroot() ? ARQUEUE : DEFAULTDIR ARQUEUE;
 
     char msg_to_send[OS_SIZE_1024 + 1];
 
@@ -28,10 +29,11 @@ void *AR_Forward(__attribute__((unused)) void *arg)
     char *ar_location_str = NULL;
     char *ar_agent_id = NULL;
     char *tmp_str = NULL;
+    char agent_id[KEYSIZE + 1] = "";
 
     /* Create the unix queue */
-    if ((arq = StartMQ(ARQUEUE, READ)) < 0) {
-        merror_exit(QUEUE_ERROR, ARQUEUE, strerror(errno));
+    if ((arq = StartMQ(path, READ)) < 0) {
+        merror_exit(QUEUE_ERROR, path, strerror(errno));
     }
 
     memset(msg, '\0', OS_SIZE_1024 + 1);
@@ -112,48 +114,46 @@ void *AR_Forward(__attribute__((unused)) void *arg)
                          tmp_str);
             }
 
-            /* Lock use of keys */
-            key_lock();
-
             /* Send to ALL agents */
             if (ar_location & ALL_AGENTS) {
                 unsigned int i;
+
+                /* Lock use of keys */
+                key_lock_read();
+
                 for (i = 0; i < keys.keysize; i++) {
-                    if (keys.keyentries[i]->rcvd >= (time(0) - (2 * NOTIFY_TIME))) {
-                        send_msg(i, msg_to_send);
+                    if (keys.keyentries[i]->rcvd >= (time(0) - DISCON_TIME)) {
+                        strncpy(agent_id, keys.keyentries[i]->id, KEYSIZE);
+                        key_unlock();
+                        send_msg(agent_id, msg_to_send, -1);
+                        key_lock_read();
                     }
                 }
+
+                key_unlock();
             }
 
             /* Send to the remote agent that generated the event */
             else if ((ar_location & REMOTE_AGENT) && (location != NULL)) {
-                agent_id = OS_IsAllowedName(&keys, location);
-                if (agent_id < 0) {
+                key_lock_read();
+                key_id = OS_IsAllowedName(&keys, location);
+
+                if (key_id < 0) {
                     key_unlock();
                     merror(AR_NOAGENT_ERROR, location);
                     continue;
                 }
 
-                send_msg((unsigned)agent_id, msg_to_send);
+                strncpy(agent_id, keys.keyentries[key_id]->id, KEYSIZE);
+                key_unlock();
+                send_msg(agent_id, msg_to_send, -1);
             }
 
             /* Send to a pre-defined agent */
             else if (ar_location & SPECIFIC_AGENT) {
                 ar_location++;
-
-                agent_id = OS_IsAllowedID(&keys, ar_agent_id);
-
-                if (agent_id < 0) {
-                    key_unlock();
-                    merror(AR_NOAGENT_ERROR, ar_agent_id);
-                    continue;
-                }
-
-                send_msg((unsigned)agent_id, msg_to_send);
+                send_msg(ar_agent_id, msg_to_send, -1);
             }
-
-            /* Lock use of keys */
-            key_unlock();
         }
     }
 }

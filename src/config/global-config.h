@@ -49,10 +49,6 @@ typedef struct __Config {
     /* Standard alerts output */
     u_int8_t alerts_log;
 
-    /* Picviz support */
-    u_int8_t picviz;
-    char *picviz_socket;
-
     /* Not currently used */
     u_int8_t keeplogdate;
 
@@ -102,6 +98,14 @@ typedef struct __Config {
     int label_cache_maxage;
     int show_hidden_labels;
 
+    // Cluster configuration
+    char *cluster_name;
+    char *node_name;
+    unsigned char hide_cluster_info;
+
+    int rotate_interval;
+    int min_rotate_interval;
+    ssize_t max_output_size;
 } _Config;
 
 #endif /* _CCONFIG__H */

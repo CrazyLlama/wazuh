@@ -123,8 +123,8 @@ void OS_LogOutput(Eventinfo *lf)
     printf(
         "** Alert %ld.%ld:%s - %s\n"
         "%d %s %02d %s %s%s%s\n%sRule: %d (level %d) -> '%s'"
-        "%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n%.1256s\n",
-        (long int)lf->time,
+        "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%.1256s\n",
+        (long int)lf->time.tv_sec,
         __crt_ftell,
         lf->generated_rule->alert_opts & DO_MAILALERT ? " mail " : "",
         lf->generated_rule->group,
@@ -175,7 +175,8 @@ void OS_LogOutput(Eventinfo *lf)
         lf->dstuser == NULL ? "" : "\nUser: ",
         lf->dstuser == NULL ? "" : lf->dstuser,
 
-        lf->full_log);
+        lf->generated_rule->alert_opts & NO_FULL_LOG ? "" : "\n",
+        lf->generated_rule->alert_opts & NO_FULL_LOG ? "" : lf->full_log);
 
     /* FIM events */
 
@@ -229,6 +230,11 @@ void OS_LogOutput(Eventinfo *lf)
         if (lf->sha1_after)
             printf("New SHA1: %s\n", lf->sha1_after);
 
+        if (lf->sha256_before)
+            printf("Old SHA256: %s\n", lf->sha256_before);
+        if (lf->sha256_after)
+            printf("New SHA256: %s\n", lf->sha256_after);
+
         if (lf->mtime_before)
             printf("Old date: %s", ctime(&lf->mtime_before));
         if (lf->mtime_after)
@@ -238,9 +244,6 @@ void OS_LogOutput(Eventinfo *lf)
             printf("Old inode: %ld\n", lf->inode_before);
         if (lf->inode_after)
             printf("New inode: %ld\n", lf->inode_after);
-
-        if (lf->diff)
-            printf("What changed: %s\n", lf->diff);
     }
 
     // Dynamic fields, except for syscheck events
@@ -259,7 +262,6 @@ void OS_LogOutput(Eventinfo *lf)
             printf("%.1256s\n", *lasts);
             lasts++;
         }
-        lf->generated_rule->last_events[0] = NULL;
     }
 
     printf("\n");
@@ -294,8 +296,8 @@ void OS_Log(Eventinfo *lf)
     fprintf(_aflog,
             "** Alert %ld.%ld:%s - %s\n"
             "%d %s %02d %s %s%s%s\n%sRule: %d (level %d) -> '%s'"
-            "%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n%.1256s\n",
-            (long int)lf->time,
+            "%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%.1256s\n",
+            (long int)lf->time.tv_sec,
             __crt_ftell,
             lf->generated_rule->alert_opts & DO_MAILALERT ? " mail " : "",
             lf->generated_rule->group,
@@ -345,7 +347,8 @@ void OS_Log(Eventinfo *lf)
             lf->dstuser == NULL ? "" : "\nUser: ",
             lf->dstuser == NULL ? "" : lf->dstuser,
 
-            lf->full_log);
+            lf->generated_rule->alert_opts & NO_FULL_LOG ? "" : "\n",
+            lf->generated_rule->alert_opts & NO_FULL_LOG ? "" : lf->full_log);
 
     /* FIM events */
 
@@ -399,6 +402,11 @@ void OS_Log(Eventinfo *lf)
         if (lf->sha1_after)
             fprintf(_aflog, "New SHA1: %s\n", lf->sha1_after);
 
+        if (lf->sha256_before)
+            fprintf(_aflog, "Old SHA256: %s\n", lf->sha256_before);
+        if (lf->sha256_after)
+            fprintf(_aflog, "New SHA256: %s\n", lf->sha256_after);
+
         if (lf->mtime_before)
             fprintf(_aflog, "Old date: %s", ctime(&lf->mtime_before));
         if (lf->mtime_after)
@@ -408,9 +416,6 @@ void OS_Log(Eventinfo *lf)
             fprintf(_aflog, "Old inode: %ld\n", lf->inode_before);
         if (lf->inode_after)
             fprintf(_aflog, "New inode: %ld\n", lf->inode_after);
-
-        if (lf->diff)
-            fprintf(_aflog, "What changed: %s\n", lf->diff);
     }
 
     // Dynamic fields, except for syscheck events
@@ -429,7 +434,6 @@ void OS_Log(Eventinfo *lf)
             fprintf(_aflog, "%.1256s\n", *lasts);
             lasts++;
         }
-        lf->generated_rule->last_events[0] = NULL;
     }
 
     fprintf(_aflog, "\n");
@@ -447,7 +451,7 @@ void OS_CustomLog(const Eventinfo *lf, const char *format)
     /* Replace all the tokens */
     os_strdup(format, log);
 
-    snprintf(tmp_buffer, 1024, "%ld", (long int)lf->time);
+    snprintf(tmp_buffer, 1024, "%ld", (long int)lf->time.tv_sec);
     tmp_log = searchAndReplace(log, CustomAlertTokenName[CUSTOM_ALERT_TOKEN_TIMESTAMP], tmp_buffer);
     free(log);
 

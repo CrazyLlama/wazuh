@@ -18,6 +18,20 @@ runInit()
         fi
     fi
 
+    # Checking for Systemd
+    if hash ps 2>&1 > /dev/null && hash grep 2>&1 > /dev/null && [ -n "$(ps -e | egrep ^\ *1\ .*systemd$)" ]; then
+        if [ "X$1" = "Xserver" ] || [ "X$1" = "Xlocal" ]; then
+            type=manager
+        else
+            type=agent
+        fi
+        cp -p ./src/systemd/wazuh-$type.service /etc/systemd/system/
+        chown root:ossec /etc/systemd/system/"wazuh-"$type.service
+        systemctl daemon-reload
+        systemctl enable "wazuh-"$type
+        return 0;
+    fi
+
     # Checking if it is a Redhat system.
     if [ -r "/etc/redhat-release" ]; then
         if [ -d /etc/rc.d/init.d ]; then
@@ -89,6 +103,16 @@ runInit()
         chmod 755 /etc/init.d/${service}
         ln -s /etc/init.d/${service} /etc/rc2.d/S97${service}
         ln -s /etc/init.d/${service} /etc/rc3.d/S97${service}
+        return 0;
+    fi
+
+    if [ "X${UN}" = "XHP-UX" ]; then
+        echo " - ${systemis} HP-UX."
+        echo " - ${modifiedinit}"
+        cp -pr ./src/init/ossec-hids-hpux.init /sbin/init.d/${service}
+        chmod 755 /sbin/init.d/${service}
+        ln -s /sbin/init.d/${service} /sbin/rc2.d/S97${service}
+        ln -s /sbin/init.d/${service} /sbin/rc3.d/S97${service}
         return 0;
     fi
 

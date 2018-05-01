@@ -34,10 +34,6 @@
 #include "output/jsonout.h"
 #include "labels.h"
 
-#ifdef PICVIZ_OUTPUT_ENABLED
-#include "output/picviz.h"
-#endif
-
 #ifdef PRELUDE_OUTPUT_ENABLED
 #include "output/prelude.h"
 #endif
@@ -56,6 +52,7 @@ void DecodeEvent(Eventinfo *lf);
 int DecodeSyscheck(Eventinfo *lf);
 int DecodeRootcheck(Eventinfo *lf);
 int DecodeHostinfo(Eventinfo *lf);
+int DecodeSyscollector(Eventinfo *lf);
 
 /* For stats */
 static void DumpLogstats(void);
@@ -67,7 +64,7 @@ int prev_year;
 char prev_month[4];
 int __crt_hour;
 int __crt_wday;
-time_t c_time;
+struct timespec c_timespec;
 char __shost[512];
 OSDecoderInfo *NULL_Decoder;
 
@@ -247,8 +244,6 @@ int main_analysisd(int argc, char **argv)
     }
 #endif
 
-
-
     /* Fix Config.ar */
     Config.ar = ar_flag;
     if (Config.ar == -1) {
@@ -266,6 +261,17 @@ int main_analysisd(int argc, char **argv)
         _ltmp = strchr(__shost, '.');
         if (_ltmp) {
             *_ltmp = '\0';
+        }
+    }
+
+    // Set resource limit for file descriptors
+
+    {
+        rlim_t nofile = getDefine_Int("analysisd", "rlimit_nofile", 1024, INT_MAX);
+        struct rlimit rlimit = { nofile, nofile };
+
+        if (setrlimit(RLIMIT_NOFILE, &rlimit) < 0) {
+            merror("Could not set resource limit for file descriptors to %d: %s (%d)", (int)nofile, strerror(errno), errno);
         }
     }
 
@@ -290,17 +296,6 @@ int main_analysisd(int argc, char **argv)
 #elif CZMQ_VERSION_MAJOR >= 3
         zeromq_output_start(Config.zeromq_output_uri, Config.zeromq_output_client_cert, Config.zeromq_output_server_cert);
 #endif
-    }
-#endif
-
-#ifdef PICVIZ_OUTPUT_ENABLED
-    /* Open the Picviz socket */
-    if (Config.picviz) {
-        OS_PicvizOpen(Config.picviz_socket);
-
-        if (chown(Config.picviz_socket, uid, gid) == -1) {
-            merror_exit(CHOWN_ERROR, Config.picviz_socket, errno, strerror(errno));
-        }
     }
 #endif
 
@@ -491,7 +486,7 @@ int main_analysisd(int argc, char **argv)
     /* Whitelist */
     if (Config.white_list == NULL) {
         if (Config.ar) {
-            minfo("No IP in the white list for active reponse.");
+            minfo("No IP in the white list for active response.");
         }
     } else {
         if (Config.ar) {
@@ -510,7 +505,7 @@ int main_analysisd(int argc, char **argv)
     /* Hostname whitelist */
     if (Config.hostname_white_list == NULL) {
         if (Config.ar)
-            minfo("No Hostname in the white list for active reponse.");
+            minfo("No Hostname in the white list for active response.");
     } else {
         if (Config.ar) {
             int wlc = 0;
@@ -535,12 +530,6 @@ int main_analysisd(int argc, char **argv)
 
     /* Going to main loop */
     OS_ReadMSG(m_queue);
-
-#ifdef PICVIZ_OUTPUT_ENABLED
-    if (Config.picviz) {
-        OS_PicvizClose();
-    }
-#endif
 
     exit(0);
 }
@@ -571,6 +560,9 @@ void OS_ReadMSG_analysisd(int m_queue)
 
     /* Initialize Rootcheck */
     RootcheckInit();
+
+    /* Initialize Syscollector */
+    SyscollectorInit();
 
     /* Initialize host info */
     HostinfoInit();
@@ -641,7 +633,7 @@ void OS_ReadMSG_analysisd(int m_queue)
     mdebug1("Active response Init completed.");
 
     /* Get current time before starting */
-    c_time = time(NULL);
+    gettime(&c_timespec);
 
     /* Start the hourly/weekly stats */
     if (Start_Hour() < 0) {
@@ -701,7 +693,7 @@ void OS_ReadMSG_analysisd(int m_queue)
             RuleNode *rulenode_pt;
 
             /* Get the time we received the event */
-            c_time = time(NULL);
+            gettime(&c_timespec);
 
             /* Default values for the log info */
             Zero_Eventinfo(lf);
@@ -756,6 +748,7 @@ void OS_ReadMSG_analysisd(int m_queue)
                 }
             }
 
+            OS_RotateLogs(lf);
 
             /* Increment number of events received */
             hourly_events++;
@@ -783,7 +776,14 @@ void OS_ReadMSG_analysisd(int m_queue)
                 }
                 lf->size = strlen(lf->log);
             }
-
+            /* Syscollector decoding */
+            else if (msg[0] == SYSCOLLECTOR_MQ) {
+                if (!DecodeSyscollector(lf)) {
+                    /* We don't process hostinfo events further */
+                    goto CLMEM;
+                }
+                lf->size = strlen(lf->log);
+            }
             /* Host information special decoder */
             else if (msg[0] == HOSTINFO_MQ) {
                 if (!DecodeHostinfo(lf)) {
@@ -833,12 +833,16 @@ void OS_ReadMSG_analysisd(int m_queue)
 
                     /* Alert for statistical analysis */
                     if (stats_rule->alert_opts & DO_LOGALERT) {
-                        __crt_ftell = ftell(_aflog);
                         if (Config.custom_alert_output) {
+                            __crt_ftell = ftell(_aflog);
                             OS_CustomLog(lf, Config.custom_alert_output_format);
                         } else if (Config.alerts_log) {
+                            __crt_ftell = ftell(_aflog);
                             OS_Log(lf);
+                        } else {
+                            __crt_ftell = ftell(_jflog);
                         }
+
                         /* Log to json file */
                         if (Config.jsonout_output) {
                             jsonout_output_event(lf);
@@ -851,6 +855,9 @@ void OS_ReadMSG_analysisd(int m_queue)
                     lf->full_log = saved_log;
                 }
             }
+
+            // Insert labels
+            lf->labels = labels_find(lf);
 
             /* Check the rules */
             DEBUG_MSG("%s: DEBUG: Checking the rules - %d ",
@@ -892,17 +899,17 @@ void OS_ReadMSG_analysisd(int m_queue)
                 /* Check ignore time */
                 if (currently_rule->ignore_time) {
                     if (currently_rule->time_ignored == 0) {
-                        currently_rule->time_ignored = lf->time;
+                        currently_rule->time_ignored = lf->time.tv_sec;
                     }
                     /* If the current time - the time the rule was ignored
                      * is less than the time it should be ignored,
                      * leave (do not alert again)
                      */
-                    else if ((lf->time - currently_rule->time_ignored)
+                    else if ((lf->time.tv_sec - currently_rule->time_ignored)
                              < currently_rule->ignore_time) {
                         break;
                     } else {
-                        currently_rule->time_ignored = lf->time;
+                        currently_rule->time_ignored = lf->time.tv_sec;
                     }
                 }
 
@@ -924,13 +931,15 @@ void OS_ReadMSG_analysisd(int m_queue)
                 /* Log the alert if configured to */
                 if (currently_rule->alert_opts & DO_LOGALERT) {
                     lf->comment = ParseRuleComment(lf);
-                    lf->labels = labels_find(lf);
-                    __crt_ftell = ftell(_aflog);
 
                     if (Config.custom_alert_output) {
+                        __crt_ftell = ftell(_aflog);
                         OS_CustomLog(lf, Config.custom_alert_output_format);
                     } else if (Config.alerts_log) {
+                        __crt_ftell = ftell(_aflog);
                         OS_Log(lf);
+                    } else {
+                        __crt_ftell = ftell(_jflog);
                     }
                     /* Log to json file */
                     if (Config.jsonout_output) {
@@ -954,13 +963,6 @@ void OS_ReadMSG_analysisd(int m_queue)
                 }
 #endif
 
-
-#ifdef PICVIZ_OUTPUT_ENABLED
-                /* Log to Picviz */
-                if (Config.picviz) {
-                    OS_PicvizLog(lf);
-                }
-#endif
 
                 /* Execute an active response */
                 if (currently_rule->ar) {
@@ -1047,6 +1049,8 @@ CLMEM:
              */
             if (lf->generated_rule == NULL) {
                 Free_Eventinfo(lf);
+            } else if (lf->generated_rule->last_events) {
+                lf->generated_rule->last_events[0] = NULL;
             }
         } else {
             free(lf->fields);

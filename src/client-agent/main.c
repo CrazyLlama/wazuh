@@ -131,7 +131,7 @@ int main(int argc, char **argv)
         merror_exit(CLIENT_ERROR);
     }
 
-    if (!agt->rip) {
+    if (!(agt->server && agt->server[0].rip)) {
         merror(AG_INV_IP);
         merror_exit(CLIENT_ERROR);
     }
@@ -140,7 +140,7 @@ int main(int argc, char **argv)
         agt->notify_time = NOTIFY_TIME;
     }
     if (agt->max_time_reconnect_try == 0 ) {
-        agt->max_time_reconnect_try = NOTIFY_TIME * 3;
+        agt->max_time_reconnect_try = RECONNECT_TIME;
     }
     if (agt->max_time_reconnect_try <= agt->notify_time) {
         agt->max_time_reconnect_try = (agt->notify_time * 3);
@@ -173,4 +173,3 @@ int main(int argc, char **argv)
 
     return (0);
 }
-

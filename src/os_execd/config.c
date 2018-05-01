@@ -10,20 +10,20 @@
 #include "shared.h"
 #include "execd.h"
 
+char ** wcom_ca_store;
 
 /* Read the config file */
 int ExecdConfig(const char *cfgfile)
 {
-#ifdef WIN32
-    int is_disabled = 1;
-#else
     int is_disabled = 0;
-#endif
+
     const char *(xmlf[]) = {"ossec_config", "active-response", "disabled", NULL};
     const char *(blocks[]) = {"ossec_config", "active-response", "repeated_offenders", NULL};
+    const char *(castore[]) = {"ossec_config", "active-response", "ca_store", NULL};
     char *disable_entry;
     char *repeated_t;
     char **repeated_a;
+    int i;
 
     OS_XML xml;
 
@@ -41,8 +41,11 @@ int ExecdConfig(const char *cfgfile)
             is_disabled = 0;
         } else {
             merror(XML_VALUEERR, "disabled", disable_entry);
+            free(disable_entry);
             return (-1);
         }
+
+        free(disable_entry);
     }
 
     repeated_t = OS_GetOneContentforElement(&xml, blocks);
@@ -51,7 +54,8 @@ int ExecdConfig(const char *cfgfile)
         int j = 0;
         repeated_a = OS_StrBreak(',', repeated_t, 5);
         if (!repeated_a) {
-            merror(XML_VALUEERR, "repeated_offenders", disable_entry);
+            merror(XML_VALUEERR, "repeated_offenders", repeated_t);
+            free(repeated_t);
             return (-1);
         }
 
@@ -80,6 +84,22 @@ int ExecdConfig(const char *cfgfile)
             }
             i++;
         }
+
+        free(repeated_t);
+
+        for (i = 0; repeated_a[i]; i++) {
+            free(repeated_a[i]);
+        }
+
+        free(repeated_a);
+    }
+
+    if (wcom_ca_store = OS_GetContents(&xml, castore), wcom_ca_store) {
+        for (i = 0; wcom_ca_store[i]; i++) {
+            mdebug1("Added CA store '%s'.", wcom_ca_store[i]);
+        }
+    } else {
+        mdebug1("No CA store defined.");
     }
 
     OS_ClearXML(&xml);

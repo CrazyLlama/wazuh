@@ -21,8 +21,8 @@ system="Système"
 user="Utilisateur"
 host="Hôte"
 hitanyorabort="Appuyez sur Entrée pour continuer ou Ctrl-C pour annuler."
-whattoinstall="Quel type d'installation voulez-vous (serveur, agent, local ou aide) ?"
-serverchose="Installation du serveur choisie"
+whattoinstall="Quel type d'installation voulez-vous (manager, agent, local ou aide) ?"
+serverchose="Installation du manager (serveur) choisie"
 clientchose="Installation de l'agent (client) choisie"
 localchose="Installation en local choisie"
 
@@ -84,8 +84,16 @@ yessyslog="Fonctionnalité syslog activé"
 # Part 3.4/3.5
 readlogs="Mise en place de la configuration pour analyser les logs suivants :"
 
-# Part 5
+# Part 3.7
+runauthd="Voulez-vous exécuter le service Auth?"
+norunauthd="Ne pas exécuter le service Auth"
+yesrunauthd="Exécution du service Auth"
+
+# Part 4
 installing="Installation du système"
+startwazuh="Voulez-vous démarrer Wazuh après l'installation?"
+nowazuhstart="Wazuh ne démarrera pas à la fin de l'installation."
+yeswazuhstart="Wazuh démarrera pas à la fin de l'installation."
 runningmake="Exécution du Makefile"
 
 # Final
@@ -113,3 +121,7 @@ pfenable="Voulez-vous utiliser le firewall PF dans la réponse active ?"
 nopf="Réponse par PF désactivée."
 pftablename="Nom de la table PF à utiliser ?"
 pfmessage="Ajouter les lignes suivantes au début de vos règles"
+
+# CA store
+addcastore="Voulez-vous ajouter d'autres certificats?"
+castore="Entrez le chemin d'accès vers un certificat X509 ou un dossier de certificat: "

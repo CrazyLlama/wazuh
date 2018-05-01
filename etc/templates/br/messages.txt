@@ -22,8 +22,8 @@ system="Sistema"
 user="Usuário"
 host="Host"
 hitanyorabort="Aperte ENTER para continuar ou Ctrl+C para abortar."
-whattoinstall="Que tipo de instalação você deseja (servidor, cliente, local ou ajuda)?"
-serverchose="Escolhida instalação servidor"
+whattoinstall="Que tipo de instalação você deseja (manager, cliente, local ou ajuda)?"
+serverchose="Escolhida instalação manager"
 clientchose="Escolhida instalação cliente"
 localchose="Escolhida instalação local"
 
@@ -86,8 +86,16 @@ yessyslog="Syslog habilitado"
 # Parte 3.4/3.5
 readlogs="Ajustando a configuração para analisar os seguintes logs:"
 
-# Parte 5
+# Part 3.7
+runauthd="Deseja habilitar Authd?"
+norunauthd="Auth desabilitado"
+yesrunauthd="Auth habilitado"
+
+# Parte 4
 installing="Instalando o sistema"
+startwazuh="Deseja iniciar o Wazuh após a instalação?"
+nowazuhstart="Wazuh não iniciará no final da instalação."
+yeswazuhstart="Wazuh começará no final da instalação."
 runningmake="Executando o Makefile"
 
 # Final
@@ -115,3 +123,7 @@ pfenable="Deseja utilizar o firewall PF nas respostas automaticas?"
 nopf="Respostas automaticas com o PF desabilitadas."
 pftablename="Qual o nome da tabela no PF que deseja utilizar?"
 pfmessage="Adicione as seguintes linhas na configuracao do seu firewall"
+
+# CA store
+addcastore="Deseja adicionar mais certificados?"
+castore="Digite o caminho para um certificado X509 ou uma pasta de certificado: "

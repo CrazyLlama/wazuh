@@ -21,7 +21,7 @@ system="System"
 user="User"
 host="Host"
 hitanyorabort="Press ENTER to continue or Ctrl-C to abort."
-whattoinstall="What kind of installation do you want (server, agent, local, hybrid or help)?"
+whattoinstall="What kind of installation do you want (manager, agent, local, hybrid or help)?"
 serverchose="Manager (server) installation chosen"
 clientchose="Agent (client) installation chosen"
 localchose="Local installation chosen"
@@ -68,6 +68,8 @@ yesrunopenscap="Running OpenSCAP (policy monitoring checks)"
 # Part 3.5/server/local
 enable_ar="Do you want to enable active response?"
 noactive="Active response disabled"
+yesactive="Active response enabled"
+
 nohosts="host-deny disabled"
 yeshosts="host-deny enabled (local) for levels >= 6"
 firewallar="Do you want to enable the firewall-drop response?"
@@ -85,8 +87,16 @@ yessyslog="Remote syslog enabled"
 # Part 3.4/3.5
 readlogs="Setting the configuration to analyze the following logs:"
 
-# Part 5
+# Part 3.7
+runauthd="Do you want to run the Auth daemon?"
+norunauthd="Not running Auth daemon"
+yesrunauthd="Running Auth daemon"
+
+# Part 4
 installing="Installing the system"
+startwazuh="Do you want to start Wazuh after the installation?"
+nowazuhstart="Wazuh will not start at the end of installation."
+yeswazuhstart="Wazuh will start at the end of installation."
 runningmake="Running the Makefile"
 
 # Final
@@ -114,3 +124,7 @@ pfenable="Do you want to use the PF firewall in the active response?"
 nopf="PF response disabled."
 pftablename="Name of the PF table to use?"
 pfmessage="Add the following lines to the beginning of your PF rules"
+
+# CA store
+addcastore="Do you want to add more certificates?"
+castore="Enter the path to a X509 certificate or a certificate folder: "

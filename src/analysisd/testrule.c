@@ -232,7 +232,7 @@ int main(int argc, char **argv)
                 while ( decodersfiles && *decodersfiles) {
 
                     if(!quiet) {
-                        minfo("Reading decoder file %s.", *decodersfiles);
+                        mdebug1("Reading decoder file %s.", *decodersfiles);
                     }
                     if (!ReadDecodeXML(*decodersfiles)) {
                         merror_exit(CONFIG_ERROR, *decodersfiles);
@@ -255,7 +255,7 @@ int main(int argc, char **argv)
                 char **listfiles;
                 listfiles = Config.lists;
                 while (listfiles && *listfiles) {
-                    minfo("Reading the lists file: '%s'", *listfiles);
+                    mdebug1("Reading the lists file: '%s'", *listfiles);
                     if (Lists_OP_LoadList(*listfiles) < 0) {
                         merror_exit(LISTS_ERROR, *listfiles);
                     }
@@ -522,13 +522,13 @@ void OS_ReadMSG(char *ut_str)
                 /* Check ignore time */
                 if (currently_rule->ignore_time) {
                     if (currently_rule->time_ignored == 0) {
-                        currently_rule->time_ignored = lf->time;
+                        currently_rule->time_ignored = lf->time.tv_sec;
                     }
                     /* If the current time - the time the rule was ignored
                      * is less than the time it should be ignored,
                      * do not alert again
                      */
-                    else if ((lf->time - currently_rule->time_ignored)
+                    else if ((lf->time.tv_sec - currently_rule->time_ignored)
                              < currently_rule->ignore_time) {
                         break;
                     } else {

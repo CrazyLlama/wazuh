@@ -80,7 +80,7 @@ int main(int argc, char **argv)
         int error = pthread_create(&cur_module->thread, NULL, cur_module->context->start, cur_module->data);
 
         if (error)
-            merror_exit("fork(): %s", strerror(error));
+            merror_exit("pthread_create(): %s", strerror(error));
     }
 
     // Wait for threads
@@ -112,27 +112,14 @@ void wm_help()
 
 void wm_setup()
 {
+    gid_t gid;
     struct sigaction action = { .sa_handler = wm_handler };
-    wmodule *database;
 
-    // Get defined values from internal_options
+    // Read XML settings and internal options
 
-    wm_task_nice = getDefine_Int("wazuh_modules", "task_nice", -20, 19);
-
-    wm_max_eps = getDefine_Int("wazuh_modules", "max_eps", 100, 1000);
-
-    // Read configuration: ossec.conf
-
-    if (ReadConfig(CWMODULE, DEFAULTCPATH, &wmodules, NULL) < 0)
+    if (wm_config() < 0) {
         exit(EXIT_FAILURE);
-
-#ifdef CLIENT
-    // Read configuration: agent.conf
-    ReadConfig(CWMODULE | CAGENT_CONFIG, AGENTCONFIG, &wmodules, NULL);
-#endif
-
-    if ((database = wm_database_read()))
-        wm_add(database);
+    }
 
     // Go daemon
 
@@ -141,10 +128,25 @@ void wm_setup()
         nowDaemon();
     }
 
+    // Set group
+
+    if (gid = Privsep_GetGroup(GROUPGLOBAL), gid == (gid_t) -1) {
+        merror_exit(USER_ERROR, "", GROUPGLOBAL);
+    }
+
+    if (Privsep_SetGroup(gid) < 0) {
+        merror_exit(SETGID_ERROR, GROUPGLOBAL, errno, strerror(errno));
+    }
+
+    // Change working directory
+
     if (chdir(DEFAULTDIR) < 0)
         merror_exit("chdir(): %s", strerror(errno));
 
-    wm_check();
+    if (wm_check() < 0) {
+        minfo("No configuration defined. Exiting...");
+        exit(EXIT_SUCCESS);
+    }
 
     // Create PID file
 

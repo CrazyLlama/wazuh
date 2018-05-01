@@ -34,12 +34,12 @@ void *read_multiline(int pos, int *rc, int drop_it)
     /* Get initial file location */
     fgetpos(logff[pos].fp, &fp_pos);
 
-    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && lines < maximum_lines) {
+    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
 
         lines++;
         linesgot++;
 
-        /* Get the last occurence of \n */
+        /* Get the last occurrence of \n */
         if ((p = strrchr(str, '\n')) != NULL) {
             *p = '\0';
         }
@@ -80,8 +80,8 @@ void *read_multiline(int pos, int *rc, int drop_it)
 
         /* Send message to queue */
         if (drop_it == 0) {
-            if (SendMSG(logr_queue, buffer, logff[pos].file,
-                        LOCALFILE_MQ) < 0) {
+            if (SendMSGtoSCK(logr_queue, buffer, logff[pos].file,
+                        LOCALFILE_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
                 merror(QUEUE_SEND);
                 if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                     merror_exit(QUEUE_FATAL, DEFAULTQPATH);
@@ -96,7 +96,7 @@ void *read_multiline(int pos, int *rc, int drop_it)
         if (__ms) {
             merror("Large message size: '%s'", str);
             while (fgets(str, OS_MAXSTR - 2, logff[pos].fp) != NULL) {
-                /* Get the last occurence of \n */
+                /* Get the last occurrence of \n */
                 if ((p = strrchr(str, '\n')) != NULL) {
                     break;
                 }

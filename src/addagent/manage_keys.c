@@ -53,6 +53,8 @@ int k_import(const char *cmdimport)
 {
     FILE *fp;
     const char *user_input;
+    char auth_file[] = AUTH_FILE;
+    char *keys_file = basename_ex(auth_file);
     char *b64_dec;
 
     char *name;
@@ -60,9 +62,6 @@ int k_import(const char *cmdimport)
     char *tmp_key;
 
     char line_read[FILE_SIZE + 1];
-
-    char *keys_file = basename_ex(AUTH_FILE);
-
     char tmp_path[PATH_MAX];
 
     snprintf(tmp_path, sizeof(tmp_path), "%s/%sXXXXXX", TMP_DIR, keys_file);
@@ -162,8 +161,6 @@ int k_import(const char *cmdimport)
                     OS_RemoveCounter("sender");
 
                     printf(ADDED);
-                    restart_necessary = 1;
-
                     free(b64_dec);
                     return (1);
                 } else { /* if(user_input[0] == 'n' || user_input[0] == 'N') */
@@ -453,11 +450,11 @@ int k_bulkload(const char *cmdbulk)
             snprintf(str1, STR_SIZE, "%d%s%d", (int)(time3 - time2), name, (int)rand1);
             snprintf(str2, STR_SIZE, "%d%s%s%d", (int)(time2 - time1), ip, id, (int)rand2);
 
-            OS_MD5_Str(str1, md1);
-            OS_MD5_Str(str2, md2);
+            OS_MD5_Str(str1, -1, md1);
+            OS_MD5_Str(str2, -1, md2);
 
             snprintf(str1, STR_SIZE, "%s%d%d%d", md1, (int)getpid(), os_random(), (int)time3);
-            OS_MD5_Str(str1, md1);
+            OS_MD5_Str(str1, -1, md1);
 
             fprintf(fp, "%s %s %s %s%s\n", id, name, c_ip.ip, md1, md2);
             fclose(fp);
@@ -468,7 +465,6 @@ int k_bulkload(const char *cmdbulk)
         }
 
         printf(AGENT_ADD, id);
-        restart_necessary = 1;
 
 cleanup:
         free(c_ip.ip);

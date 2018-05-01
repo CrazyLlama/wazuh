@@ -21,7 +21,7 @@
 /*** Function prototypes ***/
 
 /* Read logcollector config */
-int LogCollectorConfig(const char *cfgfile, int accept_remote);
+int LogCollectorConfig(const char *cfgfile);
 
 /* Start log collector daemon */
 void LogCollectorStart(void) __attribute__((noreturn));
@@ -65,6 +65,9 @@ void *read_fullcommand(int pos, int *rc, int drop_it);
 /* Read auditd events */
 void *read_audit(int pos, int *rc, int drop_it);
 
+/* Read json events */
+void *read_json(int pos, int *rc, int drop_it);
+
 #ifdef WIN32
 void win_startel();
 void win_readel();
@@ -78,7 +81,9 @@ extern int loop_timeout;
 extern int logr_queue;
 extern int open_file_attempts;
 extern logreader *logff;
+extern logsocket *logsk;
 extern int vcheck_files;
 extern int maximum_lines;
+extern logsocket default_agent;
 
 #endif /* __LOGREADER_H */

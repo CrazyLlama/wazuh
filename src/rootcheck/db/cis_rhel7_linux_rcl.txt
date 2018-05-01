@@ -18,7 +18,7 @@
 # Also, use " -> r:^\. -> ..." to search all files in a directory
 # For files, use "->" to look for a specific value in the file.
 #
-# Values can be preceeded by: =: (for equal) - default
+# Values can be preceded by: =: (for equal) - default
 #                             r: (for ossec regexes)
 #                             >: (for strcmp greater)
 #                             <: (for strcmp  lower)
@@ -66,25 +66,25 @@ f:/etc/fstab -> !r^# && !r:/var;
 
 # 1.1.6 bind mount /var/tmp to /tmp
 [CIS - RHEL7 - Build considerations - Robust partition scheme - /var/tmp is bound to /tmp {CIS: 1.1.6 RHEL7}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/etc/fstab -> r:^# && !r:/var/tmp && !r:bind;
+f:/etc/fstab -> !r:^# && !r:/var/tmp;
 
 # 1.1.7 /var/log: partition
 [CIS - RHEL7 - Build considerations - Robust partition scheme - /var/log is not on its own partition {CIS: 1.1.7 RHEL7}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/etc/fstab -> ^# && !r:/var/log;
+f:/etc/fstab -> !r:^# && !r:/var/log;
 
 # 1.1.8 /var/log/audit: partition
 [CIS - RHEL7 - Build considerations - Robust partition scheme - /var/log/audit is not on its own partition {CIS: 1.1.8 RHEL7}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/etc/fstab -> ^# && !r:/var/log/audit;
+f:/etc/fstab -> !r:^# && !r:/var/log/audit;
 
 # 1.1.9 /home: partition
 [CIS - RHEL7 - Build considerations - Robust partition scheme - /home is not on its own partition {CIS: 1.1.9 RHEL7}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/etc/fstab -> ^# && !r:/home;
+f:/etc/fstab -> !r:^# && !r:/home;
 
 # 1.1.10 /home: nodev
 [CIS - RHEL7 - 1.1.10 -  Partition /home without 'nodev' set {CIS: 1.1.10 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
 f:/etc/fstab -> !r:^# && r:/home && !r:nodev;
 
-# 1.1.11 nodev on removable media partitons (not scored)
+# 1.1.11 nodev on removable media partitions (not scored)
 [CIS - RHEL7 - 1.1.11 - Removable partition /media without 'nodev' set {CIS: 1.1.11 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
 f:/etc/fstab -> !r:^# && r:/media && !r:nodev;
 
@@ -92,7 +92,7 @@ f:/etc/fstab -> !r:^# && r:/media && !r:nodev;
 [CIS - RHEL7 - 1.1.12 - Removable partition /media without 'noexec' set {CIS: 1.1.12 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
 f:/etc/fstab -> !r:^# && r:/media && !r:noexec;
 
-# 1.1.13 nosuid on removale media partitions (not scored)
+# 1.1.13 nosuid on removable media partitions (not scored)
 [CIS - RHEL7 - 1.1.13 - Removable partition /media without 'nosuid' set {CIS: 1.1.13 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
 f:/etc/fstab -> !r:^# && r:/media && !r:nosuid;
 
@@ -170,7 +170,7 @@ f:/etc/selinux/config -> !r:SELINUX=enforcing;
 f:/etc/selinux/config -> !r:SELINUXTYPE=targeted;
 
 # 1.4.4 Remove SETroubleshoot
-[CIS - RHEL7 - 1.4.4 - SELinux setroubleshoot enabld {CIS: 1.4.4 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
+[CIS - RHEL7 - 1.4.4 - SELinux setroubleshoot enabled {CIS: 1.4.4 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
 d:$rc_dirs -> ^S\d\dsetroubleshoot$;
 f:/usr/share/dbus-1/services/sealert.service -> r:Exec=/usr/bin/sealert;
 
@@ -211,7 +211,7 @@ f:/etc/security/limits.conf -> !r:^# && !r:hard\.+core\.+0;
 
 # 1.6.1 Enable Randomized Virtual Memory Region Placement (Scored)
 # Note this is also labeled 1.6.1 in the CIS benchmark.
-[CIS - RHEL7 - 1.6.1 - Randomized Virtua Memory Region Placement not enabled  {CIS: 1.6.3 RHEL7}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
+[CIS - RHEL7 - 1.6.1 - Randomized Virtual Memory Region Placement not enabled  {CIS: 1.6.3 RHEL7}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
 f:/proc/sys/kernel/randomize_va_space -> !r:^2$;
 
 
@@ -321,7 +321,6 @@ f:/etc/sysconfig/init -> !r:^# && r:^umask && <:umask 027;
 
 # 3.2 Remove X Windows (Scored)
 [CIS - RHEL7 - 3.2 - X11 not disabled {CIS: 3.2 RHEL7} {PCI_DSS: 2.2.2}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/usr/lib/systemd/system/default.target -> r:Graphical;
 p:gdm-x-session;
 
 # 3.3 Disable Avahi Server (Scored)
@@ -382,7 +381,7 @@ d:$rc_dirs -> ^S\d\dsnmpd$;
 
 
 ###############################################
-# 4 Network Confiuration and Firewalls
+# 4 Network Configuration and Firewalls
 ###############################################
 
 ###############################################
@@ -396,8 +395,8 @@ f:/proc/sys/net/ipv6/ip_forward -> 1;
 
 # 4.1.2 Disable Send Packet Redirects (Scored)
 [CIS - RHEL7 - 4.1.2 - Network parameters - IP send redirects enabled {CIS: 4.1.2 RHEL7} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/proc/sys/net/ipv4/conf/all/send_redirects -> 0;
-f:/proc/sys/net/ipv4/conf/default/send_redirects -> 0;
+f:/proc/sys/net/ipv4/conf/all/send_redirects -> 1;
+f:/proc/sys/net/ipv4/conf/default/send_redirects -> 1;
 
 
 ###############################################
@@ -601,7 +600,7 @@ f:/proc/sys/net/ipv4/tcp_syncookies -> 0;
 # 6.1.11 Restrict at/cron to Authorized Users (Scored)
 
 ###############################################
-# 6.1 Configure SSH
+# 6.2 Configure SSH
 ###############################################
 
 # 6.2.1 Set SSH Protocol to 2 (Scored)
@@ -619,10 +618,8 @@ f:/etc/ssh/sshd_config -> !r:^# && !r:LogLevel\.+INFO;
 # TODO
 
 # 6.2.5 Set SSH MaxAuthTries to 4 or Less (Scored)
-[ CIS - RHEL7 - 6.2.5 - SSH Configuration - Set SSH MaxAuthTries to 4 or Less  {CIS - RHEL7 - 6.2.5} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:$sshd_file -> !r:^# && r:MaxAuthTries && !r:3\s*$;
-f:$sshd_file -> r:^#\s*MaxAuthTries;
-f:$sshd_file -> !r:MaxAuthTries;
+[CIS - RHEL7 - 6.2.5 - SSH Configuration - Set SSH MaxAuthTries to 4 or Less  {CIS - RHEL7 - 6.2.5} {PCI_DSS: 2.2.4}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
+f:$sshd_file -> !r:^\s*MaxAuthTries\s+4\s*$;
 
 # 6.2.6 Set SSH IgnoreRhosts to Yes (Scored)
 [CIS - RHEL7 - 6.2.6 - SSH Configuration - IgnoreRHosts disabled {CIS: 6.2.6 RHEL7} {PCI_DSS: 4.1}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
@@ -634,13 +631,11 @@ f:/etc/ssh/sshd_config -> !r:^# && r:HostbasedAuthentication\.+yes;
 
 # 6.2.8 Disable SSH Root Login (Scored)
 [CIS - RHEL7 - 6.2.8 - SSH Configuration - Root login allowed {CIS: 6.2.8 RHEL7} {PCI_DSS: 4.1}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/etc/ssh/sshd_config -> !r:^# && r:PermitRootLogin\.+yes;
-f:/etc/ssh/sshd_config -> r:^#\s*PermitRootLogin;
+f:$sshd_file -> !r:^\s*PermitRootLogin\.+no;
 
 # 6.2.9 Set SSH PermitEmptyPasswords to No (Scored)
 [CIS - RHEL7 - 6.2.9 - SSH Configuration - Empty passwords permitted {CIS: 6.2.9 RHEL7} {PCI_DSS: 4.1}] [any] [https://benchmarks.cisecurity.org/tools2/linux/CIS_Red_Hat_Enterprise_Linux_7_Benchmark_v1.1.0.pdf]
-f:/etc/ssh/sshd_config -> !r:^# && r:^PermitEmptyPasswords\.+yes;
-f:/etc/ssh/sshd_config -> r:^#\s*PermitEmptyPasswords;
+f:$sshd_file -> !r:^\s*PermitEmptyPasswords\.+no;
 
 # 6.2.10 Do Not Allow Users to Set Environment Options (Scored)
 

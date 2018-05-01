@@ -29,12 +29,10 @@
 #define ARGV0 "ossec-authd"
 #endif
 
-#ifdef LIBOPENSSL_ENABLED
-
 #include "addagent/manage_agents.h"
 #include "os_net/os_net.h"
 #include "config/authd-config.h"
-
+#include <pthread.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/bio.h>
@@ -42,11 +40,13 @@
 extern BIO *bio_err;
 #define KEYFILE  "/etc/sslmanager.key"
 #define CERTFILE "/etc/sslmanager.cert"
+#define DEFAULT_CIPHERS "HIGH:!ADH:!EXP:!MD5:!RC4:!3DES:!CAMELLIA:@STRENGTH"
 #define DEFAULT_PORT 1515
+#define DEFAULT_CENTRALIZED_GROUP "default"
 
-#define full(i, j) ((i + 1) % POOL_SIZE == j)
+#define full(i, j) ((i + 1) % AUTH_POOL == j)
 #define empty(i, j) (i == j)
-#define forward(x) x = (x + 1) % POOL_SIZE
+#define forward(x) x = (x + 1) % AUTH_POOL
 
 struct client {
     int socket;
@@ -57,11 +57,12 @@ struct keynode {
     char *id;
     char *name;
     char *ip;
+    char *group;
     struct keynode *next;
 };
 
-SSL_CTX *os_ssl_keys(int is_server, const char *os_dir, const char *cert, const char *key, const char *ca_cert, int auto_method);
-SSL_CTX *get_ssl_context(int auto_method);
+SSL_CTX *os_ssl_keys(int is_server, const char *os_dir, const char *ciphers, const char *cert, const char *key, const char *ca_cert, int auto_method);
+SSL_CTX *get_ssl_context(const char *ciphers, int auto_method);
 int load_cert_and_key(SSL_CTX *ctx, const char *cert, const char *key);
 int load_ca_cert(SSL_CTX *ctx, const char *ca_cert);
 int verify_callback(int ok, X509_STORE_CTX *store);
@@ -70,7 +71,7 @@ int verify_callback(int ok, X509_STORE_CTX *store);
 void* run_local_server(void *arg);
 
 // Append key to insertion queue
-void add_insert(const keyentry *entry);
+void add_insert(const keyentry *entry,const char *group);
 
 // Append key to backup queue
 void add_backup(const keyentry *entry);
@@ -84,6 +85,7 @@ int authd_read_config(const char *path);
 // Block signals
 void authd_sigblock();
 
+extern char shost[];
 extern keystore keys;
 extern volatile int write_pending;
 extern volatile int running;
@@ -91,5 +93,4 @@ extern pthread_mutex_t mutex_keys;
 extern pthread_cond_t cond_pending;
 extern authd_config_t config;
 
-#endif /* LIBOPENSSL_ENABLED */
 #endif /* _AUTHD_H */

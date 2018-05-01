@@ -9,6 +9,9 @@
 
 #include "shared.h"
 #include "remoted.h"
+#include "shared_download.h"
+#include <unistd.h>
+
 
 /* Prototypes */
 static void help_remoted(void) __attribute__((noreturn));
@@ -30,6 +33,7 @@ static void help_remoted()
     print_out("    -g <group>  Group to run as (default: %s)", GROUPGLOBAL);
     print_out("    -c <config> Configuration file to use (default: %s)", DEFAULTCPATH);
     print_out("    -D <dir>    Directory to chroot into (default: %s)", DEFAULTDIR);
+    print_out("    -m          Avoid creating shared merged file (read only)");
     print_out(" ");
     exit(1);
 }
@@ -41,6 +45,7 @@ int main(int argc, char **argv)
     gid_t gid;
     int debug_level = 0;
     int test_config = 0, run_foreground = 0;
+    int nocmerged = 0;
 
     const char *cfg = DEFAULTCPATH;
     const char *dir = DEFAULTDIR;
@@ -50,7 +55,7 @@ int main(int argc, char **argv)
     /* Set the name */
     OS_SetName(ARGV0);
 
-    while ((c = getopt(argc, argv, "Vdthfu:g:c:D:")) != -1) {
+    while ((c = getopt(argc, argv, "Vdthfu:g:c:D:m")) != -1) {
         switch (c) {
             case 'V':
                 print_version();
@@ -92,6 +97,9 @@ int main(int argc, char **argv)
                 }
                 dir = optarg;
                 break;
+            case 'm':
+                nocmerged = 1;
+                break;
             default:
                 help_remoted();
                 break;
@@ -116,6 +124,8 @@ int main(int argc, char **argv)
     if (RemotedConfig(cfg, &logr) < 0) {
         merror_exit(CONFIG_ERROR, cfg);
     }
+
+    logr.nocmerged = nocmerged;
 
     /* Exit if test_config is set */
     if (test_config) {
@@ -171,6 +181,9 @@ int main(int argc, char **argv)
 
     /* Start up message */
     minfo(STARTUP_MSG, (int)getpid());
+
+    //Start shared download
+    w_init_shared_download();
 
     /* Really start the program */
     i = 0;

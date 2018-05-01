@@ -22,8 +22,6 @@
  *
  */
 
-#ifdef LIBOPENSSL_ENABLED
-
 #include "shared.h"
 #include "auth.h"
 
@@ -32,14 +30,14 @@ BIO *bio_err;
 
 
 /* Create an SSL context. If certificate verification is requested
- * then load the file containing the CA chain and verify the certifcate
+ * then load the file containing the CA chain and verify the certificate
  * sent by the peer.
  */
-SSL_CTX *os_ssl_keys(int is_server, const char *os_dir, const char *cert, const char *key, const char *ca_cert, int auto_method)
+SSL_CTX *os_ssl_keys(int is_server, const char *os_dir, const char *ciphers, const char *cert, const char *key, const char *ca_cert, int auto_method)
 {
     SSL_CTX *ctx = NULL;
 
-    if (!(ctx = get_ssl_context(auto_method))) {
+    if (!(ctx = get_ssl_context(ciphers, auto_method))) {
         goto SSL_ERROR;
     }
 
@@ -94,11 +92,7 @@ SSL_ERROR:
     return (SSL_CTX *)NULL;
 }
 
-#ifndef LEGACY_SSL
-SSL_CTX *get_ssl_context(int auto_method)
-#else
-SSL_CTX *get_ssl_context(__attribute__((unused)) int auto_method)
-#endif
+SSL_CTX *get_ssl_context(const char *ciphers, int auto_method)
 {
     SSL_CTX *ctx = NULL;
 
@@ -108,19 +102,18 @@ SSL_CTX *get_ssl_context(__attribute__((unused)) int auto_method)
 
     /* Create our context */
 
-#ifndef LEGACY_SSL
-    if (!(ctx = auto_method ? SSL_CTX_new(SSLv23_method()) : SSL_CTX_new(TLSv1_2_method()))) {
+    if (ctx = SSL_CTX_new(TLS_method()), !ctx) {
         goto CONTEXT_ERR;
     }
-#else
-    if (!(ctx = SSL_CTX_new(SSLv23_method()))) {
-        goto CONTEXT_ERR;
-    }
-#endif
 
     /* Explicitly set options and cipher list */
-    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2);
-    if (!(SSL_CTX_set_cipher_list(ctx, "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH"))) {
+
+    // If auto_method isn't set, allow TLSv1.2 only
+    if (!auto_method) {
+        SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
+    }
+
+    if (!(SSL_CTX_set_cipher_list(ctx, ciphers))) {
         goto CONTEXT_ERR;
     }
 
@@ -207,5 +200,3 @@ int verify_callback(int ok, X509_STORE_CTX *store)
 
     return ok;
 }
-
-#endif /* LIBOPENSSL_ENABLED */

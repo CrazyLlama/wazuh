@@ -180,9 +180,9 @@ int DecodeRootcheck(Eventinfo *lf)
                 rootcheck_dec->fts = 0;
                 lf->decoder_info = rootcheck_dec;
                 lf->nfields = RK_NFIELDS;
-                lf->fields[RK_TITLE].key = rootcheck_dec->fields[RK_TITLE];
+                os_strdup(rootcheck_dec->fields[RK_TITLE], lf->fields[RK_TITLE].key);
                 lf->fields[RK_TITLE].value = rk_get_title(lf->log);
-                lf->fields[RK_FILE].key = rootcheck_dec->fields[RK_FILE];
+                os_strdup(rootcheck_dec->fields[RK_FILE], lf->fields[RK_FILE].key);
                 lf->fields[RK_FILE].value = rk_get_file(lf->log);
                 return (1);
             }
@@ -198,13 +198,14 @@ int DecodeRootcheck(Eventinfo *lf)
                     merror("Error handling rootcheck database (fsetpos).");
                     return (0);
                 }
-                fprintf(fp, "!%ld", (long int)lf->time);
+                fprintf(fp, "!%ld", (long int)lf->time.tv_sec);
+                fflush(fp);
                 rootcheck_dec->fts = 0;
                 lf->decoder_info = rootcheck_dec;
                 lf->nfields = RK_NFIELDS;
-                lf->fields[RK_TITLE].key = rootcheck_dec->fields[RK_TITLE];
+                os_strdup(rootcheck_dec->fields[RK_TITLE], lf->fields[RK_TITLE].key);
                 lf->fields[RK_TITLE].value = rk_get_title(lf->log);
-                lf->fields[RK_FILE].key = rootcheck_dec->fields[RK_FILE];
+                os_strdup(rootcheck_dec->fields[RK_FILE], lf->fields[RK_FILE].key);
                 lf->fields[RK_FILE].value = rk_get_file(lf->log);
                 return (1);
             }
@@ -219,15 +220,15 @@ int DecodeRootcheck(Eventinfo *lf)
 
     /* Add the new entry at the end of the file */
     fseek(fp, 0, SEEK_END);
-    fprintf(fp, "!%ld!%ld %s\n", (long int)lf->time, (long int)lf->time, lf->log);
+    fprintf(fp, "!%ld!%ld %s\n", (long int)lf->time.tv_sec, (long int)lf->time.tv_sec, lf->log);
     fflush(fp);
 
     rootcheck_dec->fts = FTS_DONE;
     lf->decoder_info = rootcheck_dec;
     lf->nfields = RK_NFIELDS;
-    lf->fields[RK_TITLE].key = rootcheck_dec->fields[RK_TITLE];
+    os_strdup(rootcheck_dec->fields[RK_TITLE], lf->fields[RK_TITLE].key);
     lf->fields[RK_TITLE].value = rk_get_title(lf->log);
-    lf->fields[RK_FILE].key = rootcheck_dec->fields[RK_FILE];
+    os_strdup(rootcheck_dec->fields[RK_FILE], lf->fields[RK_FILE].key);
     lf->fields[RK_FILE].value = rk_get_file(lf->log);
     return (1);
 }

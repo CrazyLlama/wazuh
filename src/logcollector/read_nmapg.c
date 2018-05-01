@@ -146,7 +146,7 @@ void *read_nmapg(int pos, int *rc, int drop_it)
     port[16] = '\0';
     proto[16] = '\0';
 
-    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && lines < maximum_lines) {
+    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
 
         lines++;
         /* If need clear is set, we need to clear the line */
@@ -239,8 +239,8 @@ void *read_nmapg(int pos, int *rc, int drop_it)
 
         if (drop_it == 0) {
             /* Send message to queue */
-            if (SendMSG(logr_queue, final_msg, logff[pos].file,
-                        HOSTINFO_MQ) < 0) {
+            if (SendMSGtoSCK(logr_queue, final_msg, logff[pos].file,
+                        HOSTINFO_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
                 merror(QUEUE_SEND);
                 if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                     merror_exit(QUEUE_FATAL, DEFAULTQPATH);

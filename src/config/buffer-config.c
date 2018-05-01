@@ -18,16 +18,17 @@ int Read_ClientBuffer(XML_NODE node, __attribute__((unused)) void *d1, void *d2)
     int i = 0;
 
     /* XML definitions */
-    const char *xml_buffer_disabled = "disable";
-    const char *xml_buffer_length = "length";
+    const char *xml_buffer_disabled = "disabled";
+    const char *xml_buffer_queue_size = "queue_size";
     const char *xml_events_per_second = "events_per_second";
+
+    /* Old XML definition */
+    const char *xml_buffer_length = "length";
+    const char *xml_buffer_disable = "disable";
 
     agent *logr;
 
     logr = (agent *)d2;
-
-    logr->notify_time = 0;
-    logr->max_time_reconnect_try = 0;
 
     while (node[i]) {
         if (!node[i]->element) {
@@ -36,7 +37,7 @@ int Read_ClientBuffer(XML_NODE node, __attribute__((unused)) void *d1, void *d2)
         } else if (!node[i]->content) {
             merror(XML_VALUENULL, node[i]->element);
             return (OS_INVALID);
-        } else if (strcmp(node[i]->element, xml_buffer_disabled) == 0) {
+        } else if (strcmp(node[i]->element, xml_buffer_disabled) == 0 || strcmp(node[i]->element, xml_buffer_disable) == 0) {
             if (strcmp(node[i]->content, "yes") == 0) {
                 logr->buffer = 0;
             } else if (strcmp(node[i]->content, "no") == 0) {
@@ -45,7 +46,19 @@ int Read_ClientBuffer(XML_NODE node, __attribute__((unused)) void *d1, void *d2)
                 merror(XML_VALUEERR, node[i]->element, node[i]->content);
                 return (OS_INVALID);
             }
+        } else if (strcmp(node[i]->element, xml_buffer_queue_size) == 0) {
+            if (!OS_StrIsNum(node[i]->content)) {
+                merror(XML_VALUEERR, node[i]->element, node[i]->content);
+                return (OS_INVALID);
+            }
+            logr->buflength = atoi(node[i]->content);
+            if (logr->buflength <= 0 || logr->buflength > 100000) {
+                merror(XML_VALUEERR, node[i]->element, node[i]->content);
+                return (OS_INVALID);
+            }
+
         } else if (strcmp(node[i]->element, xml_buffer_length) == 0) {
+            mwarn("The <%s> tag is deprecated, please use <%s> instead.", xml_buffer_length, xml_buffer_queue_size);
             if (!OS_StrIsNum(node[i]->content)) {
                 merror(XML_VALUEERR, node[i]->element, node[i]->content);
                 return (OS_INVALID);
@@ -74,9 +87,23 @@ int Read_ClientBuffer(XML_NODE node, __attribute__((unused)) void *d1, void *d2)
         i++;
     }
 
-    if (!logr->rip) {
-        return (OS_INVALID);
-    }
-
     return (0);
+}
+
+int Test_ClientBuffer(const char * path){
+    int fail = 0;
+    agent test_clientBuffer = { .server = 0 };
+
+    if (ReadConfig(CAGENT_CONFIG | CBUFFER, path, NULL, &test_clientBuffer) < 0) {
+		merror(RCONFIG_ERROR,"ClientBuffer", path);
+		fail = 1;
+	}
+
+    Free_Client(&test_clientBuffer);
+
+    if (fail) {
+        return -1;
+    } else {
+        return 0;
+    }
 }

@@ -16,7 +16,7 @@
 #include "external/cJSON/cJSON.h"
 #include <stdlib.h>
 
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(__hppa__)
 static int setenv(const char *name, const char *val, __attribute__((unused)) int overwrite)
 {
     int len = strlen(name) + strlen(val) + 2;
@@ -28,7 +28,6 @@ static int setenv(const char *name, const char *val, __attribute__((unused)) int
 #endif
 
 /* Global variables */
-int restart_necessary;
 time_t time1;
 time_t time2;
 time_t time3;
@@ -72,7 +71,7 @@ char *chomp(char *str)
     return (str);
 }
 
-int add_agent(int json_output)
+int add_agent(int json_output, int no_limit)
 {
     int i = 1;
     FILE *fp;
@@ -141,11 +140,11 @@ int add_agent(int json_output)
          * we should force user to provide a name from input device.
          */
         _name = getenv("OSSEC_AGENT_NAME");
-        if (_name == NULL || NameExist(_name) || !OS_IsValidName(_name)) {
+        if (_name == NULL || !strcmp(_name, shost) || NameExist(_name) || !OS_IsValidName(_name)) {
             if (json_output) {
                 cJSON *json_root = cJSON_CreateObject();
 
-                if (NameExist(_name)) {
+                if (_name && (!strcmp(_name, shost) || NameExist(_name))) {
                     cJSON_AddNumberToObject(json_root, "error", 75);
                     cJSON_AddStringToObject(json_root, "message", "Name already present");
                 } else {
@@ -171,10 +170,10 @@ int add_agent(int json_output)
         }
 
         /* Search for name  -- no duplicates (only if Authd is not running) */
-        if (sock < 0 && NameExist(name)) {
+        if (sock < 0 && (!strcmp(name, shost) || NameExist(name))) {
             printf(ADD_ERROR_NAME, name);
         }
-    } while ((sock < 0 && NameExist(name)) || !OS_IsValidName(name));
+    } while ((sock < 0 && (!strcmp(name, shost) || NameExist(name))) || !OS_IsValidName(name));
 
     /* Get IP */
     memset(ip, '\0', FILE_SIZE + 1);
@@ -244,7 +243,7 @@ int add_agent(int json_output)
     if (sock < 0 && !*id) {
         do {
             /* Default ID */
-            for (i = 1; snprintf(id, 8, "%03d", i), IDExist(id, 0); i++);
+            for (i = 1; snprintf(id, sizeof(id), "%03d", i), IDExist(id, 0); i++);
 
             /* Get ID */
 
@@ -308,6 +307,11 @@ int add_agent(int json_output)
         /* If user accepts to add */
         if (user_input[0] == 'y' || user_input[0] == 'Y') {
             if (sock < 0) {
+                if ( !no_limit && limitReached() ) {
+                    merror(AG_MAX_ERROR, MAX_AGENTS - 2);
+                    merror_exit(CONFIG_ERROR, KEYS_FILE);
+                }
+
                 time3 = time(0);
                 rand2 = os_random();
 
@@ -334,12 +338,12 @@ int add_agent(int json_output)
                 snprintf(str1, STR_SIZE, "%d%s%d", (int)(time3 - time2), name, (int)rand1);
                 snprintf(str2, STR_SIZE, "%d%s%s%d", (int)(time2 - time1), ip, id, (int)rand2);
 
-                OS_MD5_Str(str1, md1);
-                OS_MD5_Str(str2, md2);
+                OS_MD5_Str(str1, -1, md1);
+                OS_MD5_Str(str2, -1, md2);
 
                 snprintf(str1, STR_SIZE, "%s%d%d%d", md1, (int)getpid(), os_random(),
                          (int)time3);
-                OS_MD5_Str(str1, md1);
+                OS_MD5_Str(str1, -1, md1);
 
                 snprintf(key, 65, "%s%s", md1, md2);
                 fprintf(file.fp, "%s %s %s %s\n", id, name, c_ip.ip, key);
@@ -377,7 +381,6 @@ int add_agent(int json_output)
             } else
                 printf(AGENT_ADD, id);
 
-            restart_necessary = 1;
             break;
         } else { /* if(user_input[0] == 'n' || user_input[0] == 'N') */
             printf(ADD_NOT);
@@ -517,7 +520,6 @@ int remove_agent(int json_output)
                 printf(REMOVE_DONE, u_id);
             }
 
-            restart_necessary = 1;
             break;
         } else { /* if(user_input[0] == 'n' || user_input[0] == 'N') */
             printf(REMOVE_NOT);
@@ -543,4 +545,79 @@ int list_agents(int cmdlist)
     }
 
     return (0);
+}
+
+int limitReached() {
+    FILE *fp;
+    const char *keys_file = isChroot() ? KEYS_FILE : KEYSFILE_PATH;
+    char buffer[OS_BUFFER_SIZE + 1];
+    int counter = 0;
+
+    fp = fopen(keys_file, "r");
+    if (!fp) {
+        /* We can leave from here */
+        merror(FOPEN_ERROR, keys_file, errno, strerror(errno));
+        merror_exit(NO_CLIENT_KEYS);
+    }
+
+    /* Read each line. Lines are divided as "id name ip key" */
+    while (fgets(buffer, OS_BUFFER_SIZE, fp) != NULL) {
+        char *tmp_str;
+
+        if ((buffer[0] == '#') || (buffer[0] == ' ')) {
+            continue;
+        }
+
+        /* Get ID */
+        tmp_str = strchr(buffer, ' ');
+        if (!tmp_str) {
+            merror(INVALID_KEY, buffer);
+            continue;
+        }
+
+        *tmp_str = '\0';
+        tmp_str++;
+
+        /* Removed entry */
+        if (*tmp_str == '#' || *tmp_str == '!') {
+            continue;
+        }
+
+        /* Get name */
+        tmp_str = strchr(tmp_str, ' ');
+        if (!tmp_str) {
+            merror(INVALID_KEY, buffer);
+            continue;
+        }
+
+        *tmp_str = '\0';
+        tmp_str++;
+
+        /* Get IP address */
+        tmp_str = strchr(tmp_str, ' ');
+        if (!tmp_str) {
+            merror(INVALID_KEY, buffer);
+            continue;
+        }
+
+        *tmp_str = '\0';
+        tmp_str++;
+
+        /* Get key */
+        tmp_str = strchr(tmp_str, '\n');
+        if (tmp_str) {
+            *tmp_str = '\0';
+        }
+
+        counter++;
+        continue;
+    }
+
+    fclose(fp);
+
+    /* Check for maximum agent size */
+    if ( counter >= (MAX_AGENTS - 2) )
+        return 1;
+    return 0;
+
 }

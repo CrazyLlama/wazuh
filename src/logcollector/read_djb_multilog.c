@@ -13,7 +13,7 @@
 #include "logcollector.h"
 
 
-/* To translante between month (int) to month (char) */
+/* To translate between month (int) to month (char) */
 static const char *(djb_month[]) = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
                                    };
@@ -93,13 +93,13 @@ void *read_djbmultilog(int pos, int *rc, int drop_it)
     }
 
     /* Get new entry */
-    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && lines < maximum_lines) {
+    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
 
         lines++;
         /* Get buffer size */
         str_len = strlen(str);
 
-        /* Getting the last occurence of \n */
+        /* Getting the last occurrence of \n */
         if ((p = strrchr(str, '\n')) != NULL) {
             *p = '\0';
 
@@ -167,7 +167,7 @@ void *read_djbmultilog(int pos, int *rc, int drop_it)
 
         /* Send message to queue */
         if (drop_it == 0) {
-            if (SendMSG(logr_queue, buffer, logff[pos].file, MYSQL_MQ) < 0) {
+            if (SendMSGtoSCK(logr_queue, buffer, logff[pos].file, MYSQL_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
                 merror(QUEUE_SEND);
                 if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                     merror_exit(QUEUE_FATAL, DEFAULTQPATH);

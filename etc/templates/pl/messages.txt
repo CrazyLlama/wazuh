@@ -21,9 +21,9 @@ system="System"
 user="Użytkownik"
 host="Host"
 hitanyorabort="Wciśnij ENTER aby kontynuować lub Ctrl-C aby przerwać."
-whattoinstall="Wybierz rodzaj instalacji (serwer, agent, lokalnie or pomoc)?"
-serverchose="Wybrana instalacja: serwer"
-clientchose="Wybrana instalacja: agent(klient)"
+whattoinstall="Wybierz rodzaj instalacji (manager, agent, lokalnie or pomoc)?"
+serverchose="Wybrana instalacja: manager (serwer)"
+clientchose="Wybrana instalacja: agent (klient)"
 localchose="Wybrana instalacja: lokalnie"
 
 # Część 2
@@ -84,8 +84,16 @@ yessyslog="Zdalny syslog włączony"
 # Część 3.4/3.5
 readlogs="Ustawianie konfiguracji do analizy następujących logów:"
 
-# Część 5
+# Part 3.7
+runauthd="Czy chcesz uruchomić usługę Auth?"
+norunauthd="Nie działa usługa Auth"
+yesrunauthd="Uruchamianie usługi Auth"
+
+# Część 4
 installing="Instaluje system"
+startwazuh="Chcete spustit aplikaci Wazuh po instalaci?"
+nowazuhstart="Wazuh nezačne na konci instalace."
+yeswazuhstart="Wazuh začne na konci instalace."
 runningmake="Uruchomiono Makefile"
 
 # Finał
@@ -113,3 +121,7 @@ pfenable="Chcesz uywa firewall'a PF jako aktywnej ochrony?"
 nopf="ochrona PF wyczona."
 pftablename="Podaj nazwe tabeli PF?"
 pfmessage="Dodaj nastpujce linie na pocztku Twoich regu"
+
+# CA store
+addcastore="Czy chcesz dodać więcej certyfikatów?"
+castore="Wprowadź ścieżkę do certyfikatu X509 lub folderu certyfikatów: "

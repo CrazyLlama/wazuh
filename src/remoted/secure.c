@@ -18,8 +18,14 @@
 #include "os_net/os_net.h"
 #include "remoted.h"
 
+// Message handler thread
+static void * rem_handler_main(__attribute__((unused)) void * args);
+
 /* Handle each message received */
 static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *peer_info, int sock_client);
+
+// Close and remove socket from keystore
+int _close_sock(keystore * keys, int sock);
 
 /* Handle secure connections */
 void HandleSecure()
@@ -29,7 +35,7 @@ void HandleSecure()
     int n_events = 0;
     char buffer[OS_MAXSTR + 1];
     ssize_t recv_b;
-    netsize_t length;
+    uint32_t length;
     struct sockaddr_in peer_info;
 
 #if defined(__MACH__) || defined(__FreeBSD__) || defined(__OpenBSD__)
@@ -45,24 +51,36 @@ void HandleSecure()
     struct epoll_event *events = NULL;
 #endif /* __MACH__ || __FreeBSD__ || __OpenBSD__ */
 
-    /* Send msg init */
-    send_msg_init();
-
-    /* Initialize key mutex */
-    keyupdate_init();
-
     /* Initialize manager */
-    manager_init(0);
+    manager_init();
+
+    // Initialize messag equeue
+    rem_msginit(logr.queue_size);
 
     /* Create Active Response forwarder thread */
-    if (CreateThread(AR_Forward, (void *)NULL) != 0) {
-        merror_exit(THREAD_ERROR);
+    w_create_thread(update_shared_files, NULL);
+
+    /* Create Active Response forwarder thread */
+    w_create_thread(AR_Forward, NULL);
+
+    // Create Request listener thread
+    w_create_thread(req_main, NULL);
+
+    /* Create wait_for_msgs threads */
+
+    {
+        int i;
+        int sender_pool = getDefine_Int("remoted", "sender_pool", 1, 64);
+
+        mdebug2("Creating %d sender threads.", sender_pool);
+
+        for (i = 0; i < sender_pool; i++) {
+            w_create_thread(wait_for_msgs, NULL);
+        }
     }
 
-    /* Create wait_for_msgs thread */
-    if (CreateThread(wait_for_msgs, (void *)NULL) != 0) {
-        merror_exit(THREAD_ERROR);
-    }
+    // Create message handler thread
+    w_create_thread(rem_handler_main, NULL);
 
     /* Connect to the message queue
      * Exit if it fails.
@@ -75,7 +93,7 @@ void HandleSecure()
 
     /* Read authentication keys */
     minfo(ENC_READ);
-    OS_ReadKeys(&keys, 1, 0);
+    OS_ReadKeys(&keys, 1, 0, 0);
     OS_StartCounter(&keys);
 
     /* Set up peer size */
@@ -94,7 +112,10 @@ void HandleSecure()
         }
 
         EV_SET(&request, logr.sock, EVFILT_READ, EV_ADD, 0, 0, 0);
-        kevent(kqueue_fd, &request, 1, NULL, 0, &TS_ZERO);
+
+        if (kevent(kqueue_fd, &request, 1, NULL, 0, &TS_ZERO) < 0) {
+            merror_exit("kevent when adding listening socket: %s (%d)", strerror(errno), errno);
+        }
 #elif defined(__linux__)
         os_calloc(MAX_EVENTS, sizeof(struct epoll_event), events);
         epoll_fd = epoll_create(MAX_EVENTS);
@@ -107,7 +128,7 @@ void HandleSecure()
         request.data.fd = logr.sock;
 
         if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, logr.sock, &request) < 0) {
-            merror_exit(EPOLL_ERROR);
+            merror_exit("epoll when adding listening socket: %s (%d)", strerror(errno), errno);
         }
 #endif /* __MACH__ || __FreeBSD__ || __OpenBSD__ */
     }
@@ -120,6 +141,15 @@ void HandleSecure()
 #elif defined(__linux__)
             n_events = epoll_wait(epoll_fd, events, MAX_EVENTS, EPOLL_MILLIS);
 #endif /* __MACH__ || __FreeBSD__ || __OpenBSD__ */
+
+            if (n_events < 0) {
+                if (errno != EINTR) {
+                    merror("Waiting for connection: %s (%d)", strerror(errno), errno);
+                    sleep(1);
+                }
+
+                continue;
+            }
 
             int i;
             for (i = 0; i < n_events; i++) {
@@ -139,20 +169,33 @@ void HandleSecure()
                     mdebug1("New TCP connection at %s.", inet_ntoa(peer_info.sin_addr));
 #if defined(__MACH__) || defined(__FreeBSD__) || defined(__OpenBSD__)
                     EV_SET(&request, sock_client, EVFILT_READ, EV_ADD, 0, 0, 0);
-                    kevent(kqueue_fd, &request, 1, NULL, 0, &TS_ZERO);
+
+                    if (kevent(kqueue_fd, &request, 1, NULL, 0, &TS_ZERO) < 0) {
+                        merror("kevent when adding connected socket: %s (%d)", strerror(errno), errno);
+                        _close_sock(&keys, sock_client);
+                    }
 #elif defined(__linux__)
                     request.data.fd = sock_client;
                     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, sock_client, &request) < 0) {
-                        merror_exit(EPOLL_ERROR);
+                        merror("epoll when adding connected socket: %s (%d)", strerror(errno), errno);
+                        _close_sock(&keys, sock_client);
                     }
 #endif /* __MACH__ || __FreeBSD__ || __OpenBSD__ */
                 } else {
                     sock_client = fd;
                     recv_b = recv(sock_client, (char*)&length, sizeof(length), MSG_WAITALL);
+                    length = wnet_order(length);
 
                     if (getpeername(sock_client, (struct sockaddr *)&peer_info, &logr.peer_size) < 0) {
-                        merror("Couldn't get the remote peer information: %s", strerror(errno));
-                        close(sock_client);
+                        switch (errno) {
+                            case ENOTCONN:
+                                mdebug1("TCP peer was disconnected.");
+                                break;
+                            default:
+                                merror("Couldn't get the remote peer information: %s [%d]", strerror(errno), errno);
+                        }
+
+                        _close_sock(&keys, sock_client);
                         continue;
                     }
 
@@ -160,37 +203,49 @@ void HandleSecure()
 
                     /* Nothing received */
                     if (recv_b <= 0 || length > OS_MAXSTR) {
-                        if (recv_b <= 0) {
+                        switch (recv_b) {
+                        case -1:
+                            if (errno == ENOTCONN) {
+                                mdebug1("TCP peer at %s disconnected (ENOTCONN).", inet_ntoa(peer_info.sin_addr));
+                            } else {
+                                merror("TCP peer at %s: %s (%d)", inet_ntoa(peer_info.sin_addr), strerror(errno), errno);
+                            }
+
+                            break;
+
+                        case 0:
                             mdebug1("TCP peer at %s disconnected.", inet_ntoa(peer_info.sin_addr));
-                        } else {
-                            merror(RECV_ERROR);
+                            break;
+
+                        default:
+                            // length > OS_MAXSTR
+                            merror("Too big message size from %s.", inet_ntoa(peer_info.sin_addr));
                         }
 #ifdef __linux__
                         /* Kernel event is automatically deleted when closed */
                         request.data.fd = sock_client;
                         if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock_client, &request) < 0) {
-                            merror_exit(EPOLL_ERROR);
+                            merror("epoll when deleting connected socket: %s (%d)", strerror(errno), errno);
                         }
 #endif /* __linux__ */
 
-                        close(sock_client);
+                        _close_sock(&keys, sock_client);
                         continue;
                     }
 
                     recv_b = recv(sock_client, buffer, length, MSG_WAITALL);
 
-                    if (recv_b != length) {
-                        merror(RECV_ERROR);
+                    if (recv_b != (ssize_t)length) {
+                        merror("Incorrect message size from %s: expecting %u, got %zd", inet_ntoa(peer_info.sin_addr), length, recv_b);
 #ifdef __linux__
                         request.data.fd = sock_client;
                         if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, sock_client, &request) < 0) {
-                            merror_exit(EPOLL_ERROR);
+                            merror("epoll when deleting connected socket: %s (%d)", strerror(errno), errno);
                         }
 #endif /* __linux__ */
-                        close(sock_client);
-                        continue;
+                        _close_sock(&keys, sock_client);
                     } else {
-                        HandleSecureMessage(buffer, recv_b, &peer_info, sock_client);
+                        rem_msgpush(buffer, recv_b, &peer_info, sock_client);
                     }
                 }
             }
@@ -201,10 +256,26 @@ void HandleSecure()
             if (recv_b <= 0) {
                 continue;
             } else {
-                HandleSecureMessage(buffer, recv_b, &peer_info, -1);
+                rem_msgpush(buffer, recv_b, &peer_info, -1);
             }
         }
     }
+}
+
+// Message handler thread
+void * rem_handler_main(__attribute__((unused)) void * args) {
+    message_t * message;
+    char buffer[OS_MAXSTR + 1] = "";
+    mdebug1("Message handler thread started.");
+
+    while (1) {
+        message = rem_msgpop();
+        memcpy(buffer, message->buffer, message->size);
+        HandleSecureMessage(buffer, message->size, &message->addr, message->sock);
+        rem_msgfree(message);
+    }
+
+    return NULL;
 }
 
 static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *peer_info, int sock_client) {
@@ -213,7 +284,9 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
     char cleartext_msg[OS_MAXSTR + 1];
     char srcmsg[OS_FLSIZE + 1];
     char srcip[IPSIZE + 1];
+    char agname[KEYSIZE + 1];
     char *tmp_msg;
+    size_t msg_length;
 
     /* Set the source IP */
     strncpy(srcip, inet_ntoa(peer_info->sin_addr), IPSIZE);
@@ -243,7 +316,7 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
             merror(ENCFORMAT_ERROR, "(unknown)", srcip);
 
             if (sock_client >= 0)
-                close(sock_client);
+                _close_sock(&keys, sock_client);
 
             return;
         }
@@ -255,10 +328,18 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
         agentid = OS_IsAllowedDynamicID(&keys, buffer + 1, srcip);
 
         if (agentid == -1) {
-            merror(ENC_IP_ERROR, buffer + 1, srcip);
+            int id = OS_IsAllowedID(&keys, buffer + 1);
+            if (id < 0) {
+                strncpy(agname, "unknown", sizeof(agname));
+            } else {
+                strncpy(agname, keys.keyentries[id]->name, sizeof(agname));
+            }
+            agname[sizeof(agname) - 1] = '\0';
+
+            merror(ENC_IP_ERROR, buffer + 1, srcip, agname);
 
             if (sock_client >= 0)
-                close(sock_client);
+                _close_sock(&keys, sock_client);
 
             return;
         }
@@ -269,7 +350,7 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
             mwarn(DENYIP_WARN, srcip);
 
             if (sock_client >= 0)
-                close(sock_client);
+                _close_sock(&keys, sock_client);
 
             return;
         }
@@ -277,8 +358,7 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
     }
 
     /* Decrypt the message */
-    tmp_msg = ReadSecMSG(&keys, tmp_msg, cleartext_msg,
-                         agentid, recv_b - 1, srcip);
+    tmp_msg = ReadSecMSG(&keys, tmp_msg, cleartext_msg, agentid, recv_b - 1, &msg_length, srcip);
 
     if (tmp_msg == NULL) {
 
@@ -286,18 +366,26 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
         return;
     }
 
-
     /* Check if it is a control message */
     if (IsValidHeader(tmp_msg)) {
         /* We need to save the peerinfo if it is a control msg */
-        if (protocol == UDP_PROTO) {
-            memcpy(&keys.keyentries[agentid]->peer_info, peer_info, logr.peer_size);
-        } else {
-            keys.keyentries[agentid]->sock = sock_client;
+        memcpy(&keys.keyentries[agentid]->peer_info, peer_info, logr.peer_size);
+
+        if (protocol == TCP_PROTO) {
+            switch (OS_AddSocket(&keys, agentid, sock_client)) {
+            case 0:
+                merror("Couldn't add TCP socket to keystore.");
+                break;
+            case 1:
+                mdebug2("TCP socket already in keystore.");
+                break;
+            default:
+                ;
+            }
         }
 
         keys.keyentries[agentid]->rcvd = time(0);
-        save_controlmsg((unsigned)agentid, tmp_msg);
+        save_controlmsg((unsigned)agentid, tmp_msg, msg_length - 3);
 
         return;
     }
@@ -317,4 +405,10 @@ static void HandleSecureMessage(char *buffer, int recv_b, struct sockaddr_in *pe
             merror_exit(QUEUE_FATAL, DEFAULTQUEUE);
         }
     }
+}
+
+// Close and remove socket from keystore
+int _close_sock(keystore * keys, int sock) {
+    close(sock);
+    return OS_DeleteSocket(keys, sock);
 }

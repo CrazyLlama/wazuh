@@ -59,8 +59,10 @@ cd $(dirname $0)
 VERSION_FILE="../src/VERSION"
 REVISION_FILE="../src/REVISION"
 DEFS_FILE="../src/headers/defs.h"
-HELP_FILE="../src/win32/help.txt"
 NSIS_FILE="../src/win32/ossec-installer.nsi"
+MSI_FILE="../src/win32/wazuh-installer.wxs"
+FW_SETUP="../framework/setup.py"
+FW_INIT="../framework/wazuh/__init__.py"
 
 if [ -n "$version" ]
 then
@@ -79,19 +81,7 @@ then
         exit 1
     fi
 
-    sed -E -i'' "s/^(#define __ossec_version +)\"v.*\"/\1\"$version\"/" $DEFS_FILE
-
-    # File help.txt
-
-    egrep "^\*\* .+ \*\*" $HELP_FILE > /dev/null
-
-    if [ $? != 0 ]
-    then
-        echo "Error: no suitable version definition found at file $HELP_FILE"
-        exit 1
-    fi
-
-    sed -E -i'' "s/^(\*\* .+ )v.+ \*\*/\1$version \*\*/g" $HELP_FILE
+    sed -E -i'' -e "s/^(#define __ossec_version +)\"v.*\"/\1\"$version\"/" $DEFS_FILE
 
     # File ossec-installer.nsi
 
@@ -103,7 +93,24 @@ then
         exit 1
     fi
 
-    sed -E -i'' "s/^(\!define VERSION \").+\"/\1${version:1}\"/g" $NSIS_FILE
+    sed -E -i'' -e "s/^(\!define VERSION \").+\"/\1${version:1}\"/g" $NSIS_FILE
+
+    # File wazuh-installer.wxs
+
+    egrep '<Product Id="\*" Name="Wazuh Agent .+" Language="1033" Version=".+" Manufacturer=' $MSI_FILE > /dev/null
+
+    if [ $? != 0 ]
+    then
+        echo "Error: no suitable version definition found at file $MSI_FILE"
+        exit 1
+    fi
+
+    sed -E -i'' -e "s/(<Product Id=\"\*\" Name=\"Wazuh Agent ).+(\" Language=\"1033\" Version=\").+(\" Manufacturer=)/\1${version:1}\2${version:1}\3/g" $MSI_FILE
+
+    # Framework
+
+    sed -E -i'' -e "s/version='.+',/version='${version:1}',/g" $FW_SETUP
+    sed -E -i'' -e "s/__version__ = '.+'/__version__ = '${version:1}'/g" $FW_INIT
 fi
 
 if [ -n "$revision" ]
@@ -123,7 +130,7 @@ then
         exit 1
     fi
 
-    sed -E -i'' "s/^(\!define REVISION \").+\"/\1$revision\"/g" $NSIS_FILE
+    sed -E -i'' -e "s/^(\!define REVISION \").+\"/\1$revision\"/g" $NSIS_FILE
 fi
 
 if [ -n "$product" ]
@@ -139,5 +146,5 @@ then
         exit 1
     fi
 
-    sed -E -i'' "s/^(VIProductVersion \").+\"/\1$product\"/g" $NSIS_FILE
+    sed -E -i'' -e "s/^(VIProductVersion \").+\"/\1$product\"/g" $NSIS_FILE
 fi

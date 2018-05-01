@@ -29,7 +29,9 @@ typedef struct _remoted {
     int m_queue;
     int sock;
     int position;
+    int nocmerged;
     socklen_t peer_size;
+    long queue_size;
 } remoted;
 
 #endif /* __CLOGREMOTE_H */

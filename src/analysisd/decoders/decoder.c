@@ -70,6 +70,7 @@ void DecodeEvent(Eventinfo *lf)
 #endif
 
         lf->decoder_info = nnode;
+        lf->log_after_prematch = pmatch;
         child_node = node->child;
 
         /* If no child node is set, set the child node
@@ -104,6 +105,8 @@ void DecodeEvent(Eventinfo *lf)
                         }
 
                         lf->decoder_info = nnode;
+                        lf->log_after_parent = pmatch;
+                        lf->log_after_prematch = cmatch;
 
                         break;
                     }
@@ -341,7 +344,7 @@ void *Protocol_FP(Eventinfo *lf, char *field, __attribute__((unused)) const char
 {
 #ifdef TESTRULE
     if (!alert_only) {
-        print_out("       proto: '%s'", field);
+        print_out("       protocol: '%s'", field);
     }
 #endif
 
@@ -429,7 +432,7 @@ void *DynamicField_FP(Eventinfo *lf, char *field, const char *order)
     }
 #endif
 
-    lf->fields[lf->nfields].key = order;
+    os_strdup(order, lf->fields[lf->nfields].key);
     lf->fields[lf->nfields++].value = field;
     return (NULL);
 }

@@ -27,7 +27,7 @@ void *read_snortfull(int pos, int *rc, int drop_it)
     str[OS_MAXSTR] = '\0';
     f_msg[OS_MAXSTR] = '\0';
 
-    while (fgets(str, OS_MAXSTR, logff[pos].fp) != NULL && lines < maximum_lines) {
+    while (fgets(str, OS_MAXSTR, logff[pos].fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
 
         lines++;
         /* Remove \n at the end of the string */
@@ -71,8 +71,8 @@ void *read_snortfull(int pos, int *rc, int drop_it)
 
                     /* Send the message */
                     if (drop_it == 0) {
-                        if (SendMSG(logr_queue, f_msg, logff[pos].file,
-                                    LOCALFILE_MQ) < 0) {
+                        if (SendMSGtoSCK(logr_queue, f_msg, logff[pos].file,
+                                    LOCALFILE_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
                             merror(QUEUE_SEND);
                             if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                                 merror_exit(QUEUE_FATAL, DEFAULTQPATH);
@@ -95,8 +95,8 @@ void *read_snortfull(int pos, int *rc, int drop_it)
 
                     /* Send the message */
                     if (drop_it == 0) {
-                        if (SendMSG(logr_queue, f_msg, logff[pos].file,
-                                    LOCALFILE_MQ) < 0) {
+                        if (SendMSGtoSCK(logr_queue, f_msg, logff[pos].file,
+                                    LOCALFILE_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
                             merror(QUEUE_SEND);
                             if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                                 merror_exit(QUEUE_FATAL, DEFAULTQPATH);

@@ -255,13 +255,6 @@ static int OS_Connect(u_int16_t _port, unsigned int protocol, const char *_ip, i
     } else {
         return (OS_INVALID);
     }
-#ifdef HPUX
-    {
-        int flags;
-        flags = fcntl(ossock, F_GETFL, 0);
-        fcntl(ossock, F_SETFL, flags | O_NONBLOCK);
-    }
-#endif
 
     if ((_ip == NULL) || (_ip[0] == '\0')) {
         OS_CloseSocket(ossock);
@@ -304,7 +297,17 @@ int OS_ConnectTCP(u_int16_t _port, const char *_ip, int ipv6)
 /* Open a UDP socket */
 int OS_ConnectUDP(u_int16_t _port, const char *_ip, int ipv6)
 {
-    return (OS_Connect(_port, IPPROTO_UDP, _ip, ipv6));
+    int sock = OS_Connect(_port, IPPROTO_UDP, _ip, ipv6);
+
+#ifdef HPUX
+    if (sock >= 0) {
+        int flags;
+        flags = fcntl(sock, F_GETFL, 0);
+        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    }
+#endif
+
+    return sock;
 }
 
 /* Send a TCP packet (through an open socket) */
@@ -509,4 +512,32 @@ int OS_SetRecvTimeout(int socket, int seconds)
 {
     struct timeval tv = { seconds, 0 };
     return setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (const void *)&tv, sizeof(tv));
+}
+
+/* Send secure TCP message
+ * This function prepends a header containing message size as 4-byte little-endian unsigned integer.
+ * Return 0 on success or OS_SOCKTERR on error.
+ */
+int OS_SendSecureTCP(int sock, uint32_t size, const void * msg) {
+    int retval;
+    void * buffer;
+    size_t bufsz = size + sizeof(uint32_t);
+
+    os_malloc(bufsz, buffer);
+    *(uint32_t *)buffer = wnet_order(size);
+    memcpy(buffer + sizeof(uint32_t), msg, size);
+    retval = send(sock, buffer, bufsz, 0) == (ssize_t)bufsz ? 0 : OS_SOCKTERR;
+
+    free(buffer);
+    return retval;
+}
+
+// Byte ordering
+
+uint32_t wnet_order(uint32_t value) {
+#if (defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__) || defined(OS_BIG_ENDIAN)
+    return (value >> 24) | (value << 24) | ((value & 0xFF0000) >> 8) | ((value & 0xFF00) << 8);
+#else
+    return value;
+#endif
 }

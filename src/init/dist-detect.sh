@@ -95,9 +95,21 @@ else
         DIST_VER=$(uname -r | cut -d\. -f1)
         DIST_SUBVER=$(uname -r | cut -d\. -f2)
 
+    # HP-UX
+    elif [ "$(uname)" = "HP-UX" ]; then
+        DIST_NAME="HP-UX"
+        DIST_VER=$(uname -r | cut -d\. -f2)
+        DIST_SUBVER=$(uname -r | cut -d\. -f3)
+
+    # AIX
+    elif [ "$(uname)" = "AIX" ]; then
+        DIST_NAME="AIX"
+        DIST_VER=$(uname -r | cut -d\. -f2)
+        DIST_SUBVER=$(uname -r | cut -d\. -f3)
+
     # BSD
     elif [ "X$(uname)" = "XOpenBSD" -o "X$(uname)" = "XNetBSD" -o "X$(uname)" = "XFreeBSD" -o "X$(uname)" = "XDragonFly" ]; then
-        DIST_NAME=$(uname)
+        DIST_NAME="bsd"
         DIST_VER=$(uname -r | sed -rn 's/[^0-9]*([0-9]+).*/\1/p')
         DIST_SUBVER=$(uname -r | sed -rn 's/[^0-9]*[0-9]+\.([0-9]+).*/\1/p')
 

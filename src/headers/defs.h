@@ -22,6 +22,7 @@
 #define OS_TEXT    1
 
 /* Size limit control */
+#define OS_SIZE_61440   61440
 #define OS_SIZE_8192    8192
 #define OS_SIZE_6144    6144
 #define OS_SIZE_4096    4096
@@ -43,8 +44,8 @@
 #define OS_HEADER_SIZE  OS_SIZE_128     /* Maximum header size          */
 #define OS_LOG_HEADER   OS_SIZE_256     /* Maximum log header size      */
 #define IPSIZE          16              /* IP Address size              */
-#define POOL_SIZE       1000            /* Max number of connections    */
-#define BACKLOG         32              /* Socket input queue length    */
+#define AUTH_POOL       1000            /* Max number of connections    */
+#define BACKLOG         128             /* Socket input queue length    */
 #define MAX_EVENTS      1024            /* Max number of epoll events   */
 #define EPOLL_MILLIS    -1              /* Epoll wait time              */
 #define MAX_TAG_COUNTER 256             /* Max retrying counter         */
@@ -54,7 +55,7 @@
 
 /* Some global names */
 #define __ossec_name    "Wazuh"
-#define __ossec_version "v2.1.0"
+#define __ossec_version "v3.3.0"
 #define __author        "Wazuh Inc."
 #define __contact       "info@wazuh.com"
 #define __site          "http://www.wazuh.com"
@@ -82,7 +83,9 @@ https://www.gnu.org/licenses/gpl.html\n"
 #endif
 
 /* Notify the manager */
-#define NOTIFY_TIME     600 /* ... every 600 seconds (10 minutes) */
+#define NOTIFY_TIME     10      // ... every 10 seconds
+#define RECONNECT_TIME  60      // Time to reconnect
+#define DISCON_TIME     1800    // Take agent as disconnected
 
 /* User Configuration */
 #ifndef MAILUSER
@@ -95,6 +98,10 @@ https://www.gnu.org/licenses/gpl.html\n"
 
 #ifndef REMUSER
 #define REMUSER         "ossecr"
+#endif
+
+#ifndef ROOTUSER
+#define ROOTUSER        "root"
 #endif
 
 #ifndef GROUPGLOBAL
@@ -111,14 +118,31 @@ https://www.gnu.org/licenses/gpl.html\n"
 // Authd local socket
 #define AUTH_LOCAL_SOCK "/queue/ossec/auth"
 
-/* Active Response files */
+// Remote requests socket
+#define REMOTE_REQ_SOCK "/queue/ossec/request"
+
+// Local requests socket
+#define COM_LOCAL_SOCK  "/queue/ossec/com"
+
+// Database socket
+#define WDB_LOCAL_SOCK "/queue/db/wdb"
 #ifndef WIN32
-#define DEFAULTAR       "/etc/shared/ar.conf"
+#define WDB_LOCAL_SOCK_PATH DEFAULTDIR WDB_LOCAL_SOCK
+#endif
+
+#define WM_DOWNLOAD_SOCK "/queue/ossec/download"
+#define WM_DOWNLOAD_SOCK_PATH DEFAULTDIR WM_DOWNLOAD_SOCK
+
+/* Active Response files */
+#define DEFAULTAR_FILE  "ar.conf"
+
+#ifndef WIN32
+#define DEFAULTAR       "/etc/shared/" DEFAULTAR_FILE
 #define AR_BINDIR       "/active-response/bin"
 #define AGENTCONFIGINT  "/etc/shared/agent.conf"
 #define AGENTCONFIG     DEFAULTDIR "/etc/shared/agent.conf"
 #else
-#define DEFAULTAR       "shared/ar.conf"
+#define DEFAULTAR       "shared/" DEFAULTAR_FILE
 #define AR_BINDIR       "active-response/bin"
 #define AGENTCONFIG     "shared/agent.conf"
 #define AGENTCONFIGINT  "shared/agent.conf"
@@ -137,19 +161,29 @@ https://www.gnu.org/licenses/gpl.html\n"
 /* Agent information location */
 #define AGENTINFO_DIR    "/queue/agent-info"
 
+/* Agent groups location */
+#define GROUPS_DIR    "/queue/agent-groups"
+
+/* Default group name */
+#define DEFAULT_GROUP "default"
+
 /* Syscheck directory */
 #define SYSCHECK_DIR    "/queue/syscheck"
 
 /* Rootcheck directory */
 #define ROOTCHECK_DIR    "/queue/rootcheck"
 
+/* Syscollector directory */
+#define SYSCOLLECTOR_DIR    "/queue/syscollector"
+
 /* Backup directory for agents */
 #define AGNBACKUP_DIR    "/backup/agents"
 
 /* Wazuh Database */
 #define WDB_DIR         "var/db"
+#define WDB2_DIR        "queue/db"
 #define WDB_GLOB_NAME   "global.db"
-#define WDB_PROF_NAME   ".profile.db"
+#define WDB_PROF_NAME   ".template.db"
 
 /* Diff queue */
 #ifndef WIN32
@@ -180,6 +214,7 @@ https://www.gnu.org/licenses/gpl.html\n"
 #ifndef WIN32
 #define AGENT_INFO_FILE "/queue/ossec/.agent_info"
 #define AGENT_INFO_FILEP DEFAULTDIR AGENT_INFO_FILE
+#define AGENT_INFO_FILEF DEFAULTDIR AGENTINFO_DIR "/%s-%s"
 #else
 #define AGENT_INFO_FILE ".agent_info"
 #define AGENT_INFO_FILEP AGENT_INFO_FILE
@@ -256,6 +291,23 @@ https://www.gnu.org/licenses/gpl.html\n"
 #define SHAREDCFG_DIR   "shared"
 #endif
 
+// Incoming directory
+#ifndef WIN32
+#define INCOMING_DIR   "/var/incoming"
+#else
+#define INCOMING_DIR   "incoming"
+#endif
+
+// Upgrade directory
+#ifndef WIN32
+#define UPGRADE_DIR   "/var/upgrade"
+#else
+#define UPGRADE_DIR   "upgrade"
+#endif
+
+// Download directory
+#define DOWNLOAD_DIR  "/var/download"
+
 /* Built-in defines */
 #define DEFAULTQPATH    DEFAULTDIR DEFAULTQUEUE
 
@@ -297,6 +349,7 @@ https://www.gnu.org/licenses/gpl.html\n"
 #define MAX_QUEUED_EVENTS_PATH "/proc/sys/fs/inotify/max_queued_events"
 
 #define TMP_DIR "tmp"
+#define TMP_PATH DEFAULTDIR "/" TMP_DIR
 
 /* Windows COMSPEC */
 #define COMSPEC "C:\\Windows\\System32\\cmd.exe"

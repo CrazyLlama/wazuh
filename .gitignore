@@ -9,23 +9,15 @@
 
 # Auto generated build files
 src/LOCATION
-src/external/zlib/configure.log
-src/external/zlib/Makefile
-src/external/zlib/zconf.h
-src/external/zlib/zlib.pc
-src/external/zlib/zlib.3.pdf
 src/isbigendian.c
 src/analysisd/compiled_rules/compiled_rules.h
 etc/ossec.mc
 src/Config.OS
-src/external/zlib/ztest*
 
 # Compiled programs
 src/agent-auth
 src/agent_control
 src/clear_stats
-src/external/lua-5.2.3/src/ossec-lua
-src/external/lua-5.2.3/src/ossec-luac
 src/isbigendian
 src/list_agents
 src/manage_agents
@@ -52,10 +44,9 @@ src/syscheck_update
 src/verify-agent-conf
 src/wazuh-modulesd
 src/wazuh-auth
+src/wazuh-db
 
 # Windows agent
-src/external/lua-5.2.3/src/lua52.dll
-src/external/lua-5.2.3/src/ossec-lua*.exe
 src/win32/*.exe
 src/win32/LICENSE.txt
 src/win32/default-local_internal_options.conf
@@ -64,8 +55,8 @@ src/win32/help_win.txt
 src/win32/internal_options.conf
 src/win32/restart-ossec.cmd
 src/win32/route-null.cmd
-
-
+src/win32/VERSION
+src/win32/REVISION
 
 # Eclipse files
 .cproject
@@ -92,12 +83,3 @@ src/test_os_xml
 src/test_os_zlib
 src/test_shared
 etc/preloaded-vars.conf
-
-# Windows-specific build output:
-src/win32/LICENSE.txt
-src/win32/default-local_internal_options.conf
-src/win32/default-ossec.conf
-src/win32/help_win.txt
-src/win32/internal_options.conf
-src/win32/restart-ossec.cmd
-src/win32/route-null.cmd

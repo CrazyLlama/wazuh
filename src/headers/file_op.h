@@ -14,6 +14,7 @@
 
 #include <time.h>
 #include <sys/stat.h>
+#include <external/cJSON/cJSON.h>
 
 #define OS_PIDFILE  "/var/run"
 
@@ -22,13 +23,16 @@ typedef struct File {
     FILE *fp;
 } File;
 
-
 /* Set the program name - must be done before *anything* else */
 void OS_SetName(const char *name) __attribute__((nonnull));
+
+cJSON* getunameJSON();
 
 time_t File_DateofChange(const char *file) __attribute__((nonnull));
 
 ino_t File_Inode(const char *file) __attribute__((nonnull));
+
+off_t FileSize(const char * path);
 
 int IsDir(const char *file) __attribute__((nonnull));
 
@@ -40,11 +44,17 @@ char *GetRandomNoise();
 
 int DeletePID(const char *name) __attribute__((nonnull));
 
-int MergeFiles(const char *finalpath, char **files) __attribute__((nonnull));
+void DeleteState();
 
-int MergeAppendFile(const char *finalpath, const char *files) __attribute__((nonnull(1)));
+int MergeFiles(const char *finalpath, char **files, const char *tag) __attribute__((nonnull(1, 2)));
 
-int UnmergeFiles(const char *finalpath, const char *optdir) __attribute__((nonnull(1)));
+int MergeAppendFile(const char *finalpath, const char *files, const char *tag) __attribute__((nonnull(1)));
+
+int UnmergeFiles(const char *finalpath, const char *optdir, int mode) __attribute__((nonnull(1)));
+
+int TestUnmergeFiles(const char *finalpath, int mode) __attribute__((nonnull(1)));
+
+int w_backup_file(File *file, const char *source) __attribute__((nonnull(1, 2)));
 
 /* Daemonize a process */
 void goDaemon(void);
@@ -73,7 +83,18 @@ int checkVista();
 int isVista;
 #endif
 
-/* Delete directory recorsively */
+/* Delete directory recursively */
 int rmdir_ex(const char *path);
+
+// Delete directory content
+int cldir_ex(const char *name);
+
+// Delete directory content with exception list
+int cldir_ex_ignore(const char * name, const char ** ignore);
+
+// Make directory recursively
+int mkdir_ex(const char * path);
+
+int w_ref_parent_folder(const char * path);
 
 #endif /* __FILE_H */

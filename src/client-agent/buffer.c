@@ -25,6 +25,7 @@ static volatile int state = NORMAL;
 static int warn_level;
 static int normal_level;
 static int tolerance;
+static int ms_slept;
 
 struct{
   unsigned int full:1;
@@ -38,6 +39,8 @@ pthread_mutex_t mutex_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond_no_empty = PTHREAD_COND_INITIALIZER;
 
 time_t start, end;
+
+static void delay(unsigned int ms);
 
 /* Create agent buffer */
 void buffer_init(){
@@ -65,7 +68,7 @@ int buffer_append(const char *msg){
     switch (state) {
 
         case NORMAL:
-            if (full(i, j)){
+            if (full(i, j, agt->buflength + 1)){
                 buff.full = 1;
                 state = FULL;
                 start = time(0);
@@ -76,7 +79,7 @@ int buffer_append(const char *msg){
             break;
 
         case WARNING:
-            if (full(i, j)){
+            if (full(i, j, agt->buflength + 1)){
                 buff.full = 1;
                 state = FULL;
                 start = time(0);
@@ -95,8 +98,11 @@ int buffer_append(const char *msg){
             break;
     }
 
+    agent_state.msg_count++;
+
     /* When buffer is full, event is dropped */
-    if (full(i, j)){
+
+    if (full(i, j, agt->buflength + 1)){
 
         pthread_mutex_unlock(&mutex_lock);
         mdebug2("Unable to store new packet: Buffer is full.");
@@ -105,7 +111,7 @@ int buffer_append(const char *msg){
     }else{
 
         buffer[i] = strdup(msg);
-        forward(i);
+        forward(i, agt->buflength + 1);
         pthread_cond_signal(&cond_no_empty);
         pthread_mutex_unlock(&mutex_lock);
 
@@ -122,16 +128,9 @@ void *dispatch_buffer(__attribute__((unused)) void * arg){
     char normal_msg[OS_MAXSTR];
 
     char warn_str[OS_MAXSTR];
+    int wait_ms = 1000 / agt->events_persec;
 
     while(1){
-
-  #ifdef WIN32
-        int time_wait = 1000 / (agt->events_persec);
-  #else
-        int usec = 1000000 / (agt->events_persec);
-        struct timeval timeout = {0, usec};
-  #endif
-
         pthread_mutex_lock(&mutex_lock);
 
         while(empty(i, j)){
@@ -173,7 +172,7 @@ void *dispatch_buffer(__attribute__((unused)) void * arg){
         }
 
         char * msg_output = buffer[j];
-        forward(j);
+        forward(j, agt->buflength + 1);
         pthread_mutex_unlock(&mutex_lock);
 
         if (buff.warn){
@@ -182,12 +181,8 @@ void *dispatch_buffer(__attribute__((unused)) void * arg){
             mwarn(WARN_BUFFER, warn_level);
             snprintf(warn_str, OS_MAXSTR, OS_WARN_BUFFER, warn_level);
             snprintf(warn_msg, OS_MAXSTR, "%c:%s:%s", LOCALFILE_MQ, "ossec-agent", warn_str);
-    #ifdef WIN32
-            Sleep(time_wait);
-    #else
-            select(0 , NULL, NULL, NULL, &timeout);
-    #endif
-            send_msg(0, warn_msg);
+            delay(wait_ms);
+            send_msg(warn_msg, -1);
         }
 
         if (buff.full){
@@ -195,12 +190,8 @@ void *dispatch_buffer(__attribute__((unused)) void * arg){
             buff.full = 0;
             mwarn(FULL_BUFFER);
             snprintf(full_msg, OS_MAXSTR, "%c:%s:%s", LOCALFILE_MQ, "ossec-agent", OS_FULL_BUFFER);
-    #ifdef WIN32
-            Sleep(time_wait);
-    #else
-            select(0 , NULL, NULL, NULL, &timeout);
-    #endif
-            send_msg(0, full_msg);
+            delay(wait_ms);
+            send_msg(full_msg, -1);
         }
 
         if (buff.flood){
@@ -208,12 +199,8 @@ void *dispatch_buffer(__attribute__((unused)) void * arg){
             buff.flood = 0;
             mwarn(FLOODED_BUFFER);
             snprintf(flood_msg, OS_MAXSTR, "%c:%s:%s", LOCALFILE_MQ, "ossec-agent", OS_FLOOD_BUFFER);
-    #ifdef WIN32
-            Sleep(time_wait);
-    #else
-            select(0 , NULL, NULL, NULL, &timeout);
-    #endif
-            send_msg(0, flood_msg);
+            delay(wait_ms);
+            send_msg(flood_msg, -1);
         }
 
         if (buff.normal){
@@ -221,20 +208,23 @@ void *dispatch_buffer(__attribute__((unused)) void * arg){
             buff.normal = 0;
             minfo(NORMAL_BUFFER, normal_level);
             snprintf(normal_msg, OS_MAXSTR, "%c:%s:%s", LOCALFILE_MQ, "ossec-agent", OS_NORMAL_BUFFER);
-    #ifdef WIN32
-            Sleep(time_wait);
-    #else
-            select(0 , NULL, NULL, NULL, &timeout);
-    #endif
-            send_msg(0, normal_msg);
+            delay(wait_ms);
+            send_msg(normal_msg, -1);
         }
 
-#ifdef WIN32
-        Sleep(time_wait);
-#else
-        select(0 , NULL, NULL, NULL, &timeout);
-#endif
-        send_msg(0, msg_output);
+        delay(wait_ms);
+        send_msg(msg_output, -1);
         free(msg_output);
     }
+}
+
+void delay(unsigned int ms) {
+#ifdef WIN32
+    Sleep(ms);
+#else
+    struct timeval timeout = { 0, ms * 1000 };
+    select(0 , NULL, NULL, NULL, &timeout);
+#endif
+
+    ms_slept += ms;
 }

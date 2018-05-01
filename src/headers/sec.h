@@ -11,6 +11,11 @@
 #define __SEC_H
 
 #include <time.h>
+#include <pthread.h>
+
+typedef enum _crypt_method{
+    W_METH_BLOWFISH,W_METH_AES
+} crypt_method;
 
 typedef struct keystore_flags_t {
     unsigned int rehash_keys:1;     // Flag: rehash keys on adding
@@ -28,10 +33,14 @@ typedef struct _keyentry {
     char *key;
     char *name;
 
+    ino_t inode;
+
     os_ip *ip;
     int sock;
+    pthread_mutex_t mutex;
     struct sockaddr_in peer_info;
     FILE *fp;
+    crypt_method crypto_method;
 } keyentry;
 
 /* Key storage */
@@ -42,6 +51,7 @@ typedef struct _keystore {
     /* Hashes, based on the ID/IP to look up the keys */
     OSHash *keyhash_id;
     OSHash *keyhash_ip;
+    OSHash *keyhash_sock;
 
     /* Total key size */
     unsigned int keysize;
@@ -60,7 +70,7 @@ typedef struct _keystore {
     size_t removed_keys_size;
 } keystore;
 
-#define KEYSTORE_INITIALIZER { NULL, NULL, NULL, 0, 0, 0, 0, { 0, 0 }, NULL, 0 }
+#define KEYSTORE_INITIALIZER { NULL, NULL, NULL, NULL, 0, 0, 0, 0, { 0, 0 }, NULL, 0 }
 
 /** Function prototypes -- key management **/
 
@@ -68,7 +78,7 @@ typedef struct _keystore {
 int OS_CheckKeys(void);
 
 /* Read the keys */
-void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed) __attribute((nonnull));
+void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed, int no_limit) __attribute((nonnull));
 
 /* Free the auth keys */
 void OS_FreeKeys(keystore *keys) __attribute((nonnull));
@@ -92,7 +102,7 @@ void OS_PassEmptyKeyfile();
 int OS_AddKey(keystore *keys, const char *id, const char *name, const char *ip, const char *key) __attribute((nonnull));
 
 /* Delete a key */
-int OS_DeleteKey(keystore *keys, const char *id);
+int OS_DeleteKey(keystore *keys, const char *id, int purge);
 
 /* Write keystore on client keys file */
 int OS_WriteKeys(const keystore *keys);
@@ -118,12 +128,19 @@ int OS_IsAllowedDynamicID(keystore *keys, const char *id, const char *srcip) __a
 /** Function prototypes -- send/recv messages **/
 
 /* Decrypt and decompress a remote message */
-char *ReadSecMSG(keystore *keys, char *buffer, char *cleartext,
-                 int id, unsigned int buffer_size, const char *ip) __attribute((nonnull));
+char *ReadSecMSG(keystore *keys, char *buffer, char *cleartext, int id, unsigned int buffer_size, size_t *final_size, const char *ip) __attribute((nonnull));
 
 /* Create an OSSEC message (encrypt and compress) */
-size_t CreateSecMSG(const keystore *keys, const char *msg, char *msg_encrypted, unsigned int id) __attribute((nonnull));
+size_t CreateSecMSG(const keystore *keys, const char *msg, size_t msg_length, char *msg_encrypted, unsigned int id) __attribute((nonnull));
 
+// Add socket number into keystore
+int OS_AddSocket(keystore * keys, unsigned int i, int sock);
+
+// Delete socket number from keystore
+int OS_DeleteSocket(keystore * keys, int sock);
+
+/* Set the agent crypto method readed from the ossec.conf file */
+void os_set_agent_crypto_method(keystore * keys,const int method);
 
 /** Remote IDs directories and internal definitions */
 #ifndef WIN32

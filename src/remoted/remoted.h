@@ -32,6 +32,13 @@ typedef struct pending_data_t {
     int changed;
 } pending_data_t;
 
+typedef struct message_t {
+    char * buffer;
+    unsigned int size;
+    struct sockaddr_in addr;
+    int sock;
+} message_t;
+
 /** Function prototypes **/
 
 /* Read remoted config */
@@ -53,32 +60,51 @@ void HandleSecure() __attribute__((noreturn));
 void *AR_Forward(void *arg) __attribute__((noreturn));
 
 /* Initialize the manager */
-void manager_init(int isUpdate);
+void manager_init();
 
 /* Wait for messages from the agent to analyze */
 void *wait_for_msgs(void *none);
 
+/* Update shared files */
+void *update_shared_files(void *none);
+
 /* Save control messages */
-void save_controlmsg(unsigned int agentid, char *msg);
+void save_controlmsg(unsigned int agentid, char *msg, size_t msg_length);
+
+// Request listener thread entry point
+void * req_main(void * arg);
+
+// Save request data (ack or response). Return 0 on success or -1 on error.
+int req_save(const char * counter, const char * buffer, size_t length);
 
 /* Send message to agent */
-/* Must call key_lock() before this */
-int send_msg(unsigned int agentid, const char *msg);
-
-/* Initializing send_msg */
-void send_msg_init(void);
+/* Must not call key_lock() before this */
+int send_msg(const char *agent_id, const char *msg, ssize_t msg_length);
 
 int check_keyupdate(void);
 
-void key_lock(void);
+void key_lock_read(void);
+
+void key_lock_write(void);
 
 void key_unlock(void);
 
-void keyupdate_init(void);
+// Init message queue
+void rem_msginit(size_t size);
+
+// Push message into queue
+int rem_msgpush(const char * buffer, unsigned long size, struct sockaddr_in * addr, int sock);
+
+// Pop message from queue
+message_t * rem_msgpop();
+
+// Free message
+void rem_msgfree(message_t * message);
 
 /** Global variables **/
 
 extern keystore keys;
 extern remoted logr;
+extern char* node_name;
 
 #endif /* __LOGREMOTE_H */

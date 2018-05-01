@@ -20,8 +20,8 @@
 ; general
 !define MUI_ICON install.ico
 !define MUI_UNICON uninstall.ico
-!define VERSION "2.1.0"
-!define REVISION "3473"
+!define VERSION "3.3.0"
+!define REVISION "3309"
 !define NAME "Wazuh"
 !define SERVICE "OssecSvc"
 
@@ -36,7 +36,7 @@ Name "${NAME} Windows Agent v${VERSION}"
 BrandingText "Copyright (C) 2017 Wazuh Inc."
 OutFile "${OutFile}"
 
-VIProductVersion "2.1.0.2"
+VIProductVersion "3.2.0.0"
 VIAddVersionKey ProductName "${NAME}"
 VIAddVersionKey CompanyName "Wazuh Inc."
 VIAddVersionKey LegalCopyright "2017 - Wazuh Inc."
@@ -173,10 +173,11 @@ Section "Wazuh Agent (required)" MainSec
     CreateDirectory "$INSTDIR\tmp"
 	CreateDirectory "$INSTDIR\queue"
 	CreateDirectory "$INSTDIR\queue\diff"
+    CreateDirectory "$INSTDIR\incoming"
+    CreateDirectory "$INSTDIR\upgrade"
+    CreateDirectory "$INSTDIR\wodles"
 
     ; install files
-    File ossec-lua.exe
-    File ossec-luac.exe
     File ossec-agent.exe
     File ossec-agent-eventchannel.exe
     File default-ossec.conf
@@ -197,12 +198,19 @@ Section "Wazuh Agent (required)" MainSec
     File /oname=shared\win_applications_rcl.txt ../rootcheck\db\win_applications_rcl.txt
     File /oname=shared\win_malware_rcl.txt ../rootcheck\db\win_malware_rcl.txt
     File /oname=shared\win_audit_rcl.txt ../rootcheck\db\win_audit_rcl.txt
-    File help.txt
+    File /oname=help.txt help_win.txt
     File vista_sec.txt
     File /oname=active-response\bin\route-null.cmd route-null.cmd
     File /oname=active-response\bin\restart-ossec.cmd restart-ossec.cmd
-    File /oname=libwinpthread-1.dll /usr/i686-w64-mingw32/lib/libwinpthread-1.dll
+    File /oname=libwinpthread-1.dll libwinpthread-1.dll
 	File agent-auth.exe
+    File /oname=wpk_root.pem ../../etc/wpk_root.pem
+    File ../wazuh_modules/syscollector/syscollector_win_ext.dll
+    File /oname=libcjson.dll ../external/cJSON/libcjson.dll
+    File /oname=libcrypto-1_1.dll ../external/openssl/libcrypto-1_1.dll
+    File /oname=zlib1.dll ../external/zlib/zlib1.dll
+    File VERSION
+    File REVISION
 
     ; Create empty file active-responses.log
     FileOpen $0 "$INSTDIR\active-response\active-responses.log" w
@@ -218,7 +226,7 @@ Section "Wazuh Agent (required)" MainSec
 
     ; write registry keys
     WriteRegStr HKLM SOFTWARE\ossec "Install_Dir" "$INSTDIR"
-    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC" "DisplayName" "${NAME} Agent ${VERSION}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC" "DisplayName" "${NAME} Agent"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC" "DisplayVersion" "${VERSION}"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC" "Publisher" "Wazuh, Inc."
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\OSSEC" "DisplayIcon" '"$INSTDIR\favicon.ico"'
@@ -236,25 +244,6 @@ Section "Wazuh Agent (required)" MainSec
     ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
     var /global CURRENTTIME
     StrCpy $CURRENTTIME "$2-$1-$0 $4:$5:$6"
-
-    ; write version and install information
-    VersionInstall:
-        FileOpen $0 "$INSTDIR\VERSION.txt" w
-        FileWrite $0 "${NAME} v${VERSION} - Revision ${REVISION} - Installed on $CURRENTTIME"
-        FileClose $0
-        IfErrors VersionError VersionComplete
-    VersionError:
-        MessageBox MB_ABORTRETRYIGNORE|MB_ICONSTOP "$\r$\n\
-            Failure saving version to file.$\r$\n$\r$\n\
-            File:$\r$\n$\r$\n$INSTDIR\VERSION.txt$\r$\n$\r$\n\
-            Click Abort to stop the installation,$\r$\n\
-            Retry to try again, or$\r$\n\
-            Ignore to skip this file." /SD IDABORT IDIGNORE VersionComplete IDRETRY VersionInstall
-
-        SetErrorLevel 2
-        Abort
-    VersionComplete:
-        ClearErrors
 
     ; create log file
     LogInstall:
@@ -479,8 +468,6 @@ Section "Uninstall"
     ; remove files and uninstaller
     Delete "$INSTDIR\ossec-agent.exe"
 	Delete "$INSTDIR\agent-auth.exe"
-    Delete "$INSTDIR\ossec-lua.exe"
-    Delete "$INSTDIR\ossec-luac.exe"
     Delete "$INSTDIR\manage_agents.exe"
     Delete "$INSTDIR\ossec.conf"
     Delete "$INSTDIR\uninstall.exe"
@@ -493,6 +480,12 @@ Section "Uninstall"
     Delete "$INSTDIR\active-response\bin\*"
     Delete "$INSTDIR\active-response\*"
     Delete "$INSTDIR\tmp\*"
+    Delete "$INSTDIR\incoming\*"
+    Delete "$INSTDIR\wodles\*"
+    Delete "$INSTDIR\syscollector_win_ext.dll"
+    Delete "$INSTDIR\libcjson.dll"
+    Delete "$INSTDIR\libcrypto-1_1.dll"
+    Delete "$INSTDIR\zlib1.dll"
 
     ; remove shortcuts
     SetShellVarContext all
@@ -510,7 +503,10 @@ Section "Uninstall"
     RMDir "$INSTDIR\active-response"
     RMDir "$INSTDIR\tmp"
 	RMDir /r "$INSTDIR\queue\diff"
+    RMDir "$INSTDIR\incoming"
+    RMDir /r "$INSTDIR\upgrade"
 	RMDir "$INSTDIR\queue"
+    RMDir "$INSTDIR\wodles"
     RMDir "$INSTDIR"
 SectionEnd
 

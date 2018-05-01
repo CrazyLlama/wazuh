@@ -21,20 +21,22 @@ static void helpmsg()
 {
     printf("\n%s %s: Control remote agents.\n", __ossec_name, ARGV0);
     printf("Available options:\n");
-    printf("\t-h          This help message.\n");
-    printf("\t-l          List available (active or not) agents.\n");
-    printf("\t-lc         List active agents.\n");
-    printf("\t-i <id>     Extracts information from an agent.\n");
-    printf("\t-R -a       Restart all agents.\n");
-    printf("\t-R -u <id>  Restart the specified agent.\n");
-    printf("\t-r -a       Runs the integrity/rootkit checking on all agents now.\n");
-    printf("\t-r -u <id>  Runs the integrity/rootkit checking on one agent now.\n\n");
-    printf("\t-b <ip>     Blocks the specified ip address.\n");
-    printf("\t-f <ar>     Used with -b, specifies which response to run.\n");
-    printf("\t-L          List available active responses.\n");
-    printf("\t-m          Show the limit of agents that can be added.\n");
-    printf("\t-s          Changes the output to CSV (comma delimited).\n");
-	printf("\t-j          Changes the output to JSON .\n");
+    printf("\t-h                This help message.\n");
+    printf("\t-l                List available (active or not) agents.\n");
+    printf("\t-lc               List active agents.\n");
+    printf("\t-i <id>           Extracts information from an agent.\n");
+    printf("\t-R -a             Restart all agents.\n");
+    printf("\t-R -u <id>        Restart the specified agent.\n");
+    printf("\t-r -a             Runs the integrity/rootkit checking on all agents now.\n");
+    printf("\t-r -u <id>        Runs the integrity/rootkit checking on one agent now.\n\n");
+    printf("\t-s                Changes the output to CSV (comma delimited).\n");
+    printf("\t-j                Changes the output to JSON .\n");
+    printf("\t-m                Show the limit of agents that can be added.\n");
+    printf("Available options for active response:\n");
+    printf("\t-b <ip>           Blocks the specified ip address.\n");
+    printf("\t-f <ar> -a        Used with -b, specifies which response to run. Apply AR on all agents.\n");
+    printf("\t-f <ar> -u <id>   Used with -b, specifies which response to run. Apply AR on specified agent.\n");
+    printf("\t-L                List available active responses.\n");
     exit(1);
 }
 
@@ -117,7 +119,12 @@ int main(int argc, char **argv)
                 break;
             case 'i':
                 info_agent++;
-            /* no break; */
+                if (!optarg) {
+                    merror("-i needs an argument");
+                    helpmsg();
+                }
+                agent_id = optarg;
+                break;
             case 'u':
                 if (!optarg) {
                     merror("-u needs an argument");
@@ -313,7 +320,7 @@ int main(int argc, char **argv)
     if (agent_id != NULL) {
         if (strcmp(agent_id, "000") != 0) {
             OS_PassEmptyKeyfile();
-            OS_ReadKeys(&keys, 1, 0);
+            OS_ReadKeys(&keys, 1, 0, 0);
 
             agt_id = OS_IsAllowedID(&keys, agent_id);
             if (agt_id < 0) {
@@ -336,7 +343,7 @@ int main(int argc, char **argv)
 
     /* Print information from an agent */
     if (info_agent) {
-        int agt_status = 0;
+        agent_status_t agt_status = 0;
         char final_ip[128 + 1];
         char final_mask[128 + 1];
         agent_info *agt_info;
@@ -401,13 +408,14 @@ int main(int argc, char **argv)
         if (!csv_output && !json_output) {
             printf("   Operating system:    %s\n", agt_info->os);
             printf("   Client version:      %s\n", agt_info->version);
+            printf("   Shared file hash:    %s\n", agt_info->merged_sum);
             printf("   Last keep alive:     %s\n\n", agt_info->last_keepalive);
 
             if (end_time) {
                 printf("   Syscheck last started at:  %s\n", agt_info->syscheck_time);
-                printf("   Syscheck last ended   at:  %s\n", agt_info->syscheck_endtime);
+                printf("   Syscheck last ended at:    %s\n", agt_info->syscheck_endtime);
                 printf("   Rootcheck last started at: %s\n", agt_info->rootcheck_time);
-                printf("   Rootcheck last ended   at: %s\n\n", agt_info->rootcheck_endtime);
+                printf("   Rootcheck last ended at:   %s\n\n", agt_info->rootcheck_endtime);
             } else {
                 printf("   Syscheck last started  at: %s\n", agt_info->syscheck_time);
                 printf("   Rootcheck last started at: %s\n", agt_info->rootcheck_time);
@@ -415,11 +423,15 @@ int main(int argc, char **argv)
         }else if(json_output){
                 cJSON_AddStringToObject(json_data, "os", agt_info->os);
                 cJSON_AddStringToObject(json_data, "version", agt_info->version);
+                cJSON_AddStringToObject(json_data, "mergedSum", agt_info->merged_sum);
                 cJSON_AddStringToObject(json_data, "lastKeepAlive", agt_info->last_keepalive);
                 cJSON_AddStringToObject(json_data, "syscheckTime", agt_info->syscheck_time);
-                cJSON_AddStringToObject(json_data, "syscheckEndTime", end_time ? agt_info->syscheck_endtime : "");
                 cJSON_AddStringToObject(json_data, "rootcheckTime", agt_info->rootcheck_time);
-                cJSON_AddStringToObject(json_data, "rootcheckEndTime", end_time ? agt_info->rootcheck_endtime : "");
+
+                if (end_time) {
+                    cJSON_AddStringToObject(json_data, "syscheckEndTime", agt_info->syscheck_endtime);
+                    cJSON_AddStringToObject(json_data, "rootcheckEndTime", agt_info->rootcheck_endtime);
+                }
         } else {
             printf("%s,%s,%s,%s,%s,\n",
                    agt_info->os,
@@ -595,6 +607,38 @@ int main(int argc, char **argv)
     /* Run active response on the specified agent id */
     if (ip_address && ar && (agent_id || restart_all_agents)) {
         /* Connect to remoted */
+        FILE *fp;
+        int pass = 0;
+
+        if (fp = fopen(DEFAULTAR, "r"), fp) {
+            char name[256];
+            char command[256];
+            unsigned timeout;
+            char end;
+            int line;
+            int r;
+
+            for (line = 1; r = fscanf(fp, "%255s - %255s - %u%c", name, command, &timeout, &end), r == 4; line++) {
+                if (strcmp(name, ar) == 0) {
+                    pass = 1;
+                    break;
+                }
+            }
+
+            if (r != 4 && r != EOF) {
+                printf("\n** Active response file is corrupted at line %d.\n", line);
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            printf("\n** Active response is not available.\n");
+            exit(EXIT_FAILURE);
+        }
+
+        if (!pass) {
+            printf("\n** Selected active response does not exist.\n");
+            exit(EXIT_FAILURE);
+        }
+
         mdebug1("Connecting to remoted...");
         arq = connect_to_remoted();
         if (arq < 0) {

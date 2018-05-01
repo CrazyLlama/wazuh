@@ -22,9 +22,14 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
     cJSON* file_diff;
     cJSON* manager;
 	cJSON* agent;
+    cJSON* predecoder;
+    cJSON* data;
+    cJSON* cluster;
 	char manager_name[512];
     char* out;
     int i;
+
+    extern long int __crt_ftell;
 
     root = cJSON_CreateObject();
 
@@ -34,6 +39,30 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
     cJSON_AddItemToObject(root, "rule", rule = cJSON_CreateObject());
     cJSON_AddItemToObject(root, "agent", agent = cJSON_CreateObject());
     cJSON_AddItemToObject(root, "manager", manager = cJSON_CreateObject());
+    data = cJSON_CreateObject();
+
+    if ( lf->time.tv_sec ) {
+
+        char alert_id[19];
+        alert_id[18] = '\0';
+        if((snprintf(alert_id, 18, "%ld.%ld", (long int)lf->time.tv_sec, __crt_ftell)) < 0) {
+            merror("snprintf failed");
+        }
+
+        cJSON_AddStringToObject(root, "id", alert_id);
+    }
+
+    // Cluster information
+    if (!Config.hide_cluster_info) {
+        cJSON_AddItemToObject(root, "cluster", cluster = cJSON_CreateObject());
+        if(Config.cluster_name)
+            cJSON_AddStringToObject(cluster, "name", Config.cluster_name);
+        else
+            cJSON_AddStringToObject(cluster, "name", "wazuh");
+
+        if(Config.node_name)
+            cJSON_AddStringToObject(cluster, "node", Config.node_name);
+    }
 
 	/* Get manager hostname */
     memset(manager_name, '\0', 512);
@@ -63,20 +92,24 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         if(lf->generated_rule->frequency){
             cJSON_AddNumberToObject(rule, "frequency", lf->generated_rule->frequency);
         }
-        if(lf->generated_rule->firedtimes){
+        if(lf->generated_rule->firedtimes && !(lf->generated_rule->alert_opts & NO_COUNTER)) {
             cJSON_AddNumberToObject(rule, "firedtimes", lf->generated_rule->firedtimes);
         }
         cJSON_AddItemToObject(rule, "mail", cJSON_CreateBool(lf->generated_rule->alert_opts & DO_MAILALERT));
+
+        if (lf->generated_rule->last_events && lf->generated_rule->last_events[0] && lf->generated_rule->last_events[1] && lf->generated_rule->last_events[1][0]) {
+            cJSON_AddStringToObject(root, "previous_output", lf->generated_rule->last_events[1]);
+        }
     }
 
     if(lf->protocol) {
-        cJSON_AddStringToObject(root, "protocol", lf->protocol);
+        cJSON_AddStringToObject(data, "protocol", lf->protocol);
     }
     if(lf->action) {
-        cJSON_AddStringToObject(root, "action", lf->action);
+        cJSON_AddStringToObject(data, "action", lf->action);
     }
     if(lf->srcip) {
-        cJSON_AddStringToObject(root, "srcip", lf->srcip);
+        cJSON_AddStringToObject(data, "srcip", lf->srcip);
     }
     #ifdef LIBGEOIP_ENABLED
     if (lf->srcgeoip && Config.geoip_jsonout) {
@@ -84,13 +117,13 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
     }
     #endif
     if (lf->srcport) {
-        cJSON_AddStringToObject(root, "srcport", lf->srcport);
+        cJSON_AddStringToObject(data, "srcport", lf->srcport);
     }
     if(lf->srcuser) {
-        cJSON_AddStringToObject(root, "srcuser", lf->srcuser);
+        cJSON_AddStringToObject(data, "srcuser", lf->srcuser);
     }
     if(lf->dstip) {
-        cJSON_AddStringToObject(root, "dstip", lf->dstip);
+        cJSON_AddStringToObject(data, "dstip", lf->dstip);
     }
     #ifdef LIBGEOIP_ENABLED
     if (lf->dstgeoip && Config.geoip_jsonout) {
@@ -98,12 +131,12 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
     }
     #endif
     if (lf->dstport) {
-        cJSON_AddStringToObject(root, "dstport", lf->dstport);
+        cJSON_AddStringToObject(data, "dstport", lf->dstport);
     }
     if(lf->dstuser) {
-        cJSON_AddStringToObject(root, "dstuser", lf->dstuser);
+        cJSON_AddStringToObject(data, "dstuser", lf->dstuser);
     }
-    if(lf->full_log) {
+    if(lf->full_log && !(lf->generated_rule && lf->generated_rule->alert_opts & NO_FULL_LOG)) {
         cJSON_AddStringToObject(root, "full_log", lf->full_log);
     }
     if (lf->agent_id) {
@@ -155,6 +188,12 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         if (lf->sha1_after) {
             cJSON_AddStringToObject(file_diff, "sha1_after", lf->sha1_after);
         }
+        if (lf->sha256_before) {
+            cJSON_AddStringToObject(file_diff, "sha256_before", lf->sha256_before);
+        }
+        if (lf->sha256_after) {
+            cJSON_AddStringToObject(file_diff, "sha256_after", lf->sha256_after);
+        }
         if (lf->uname_before) {
             cJSON_AddStringToObject(file_diff, "uname_before", lf->uname_before);
         }
@@ -204,26 +243,35 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         }
     }
 
-    if(lf->program_name)
-        cJSON_AddStringToObject(root, "program_name", lf->program_name);
+    if (lf->program_name || lf->dec_timestamp) {
+        cJSON_AddItemToObject(root, "predecoder", predecoder = cJSON_CreateObject());
+
+        if (lf->program_name) {
+            cJSON_AddStringToObject(predecoder, "program_name", lf->program_name);
+        }
+
+        if (lf->dec_timestamp) {
+            cJSON_AddStringToObject(predecoder, "timestamp", lf->dec_timestamp);
+        }
+    }
 
     if(lf->id)
-        cJSON_AddStringToObject(root, "id", lf->id);
+        cJSON_AddStringToObject(data, "id", lf->id);
 
     if(lf->status)
-        cJSON_AddStringToObject(root, "status", lf->status);
+        cJSON_AddStringToObject(data, "status", lf->status);
 
     if(lf->command)
         cJSON_AddStringToObject(root, "command", lf->command);
 
     if(lf->url)
-        cJSON_AddStringToObject(root, "url", lf->url);
+        cJSON_AddStringToObject(data, "url", lf->url);
 
     if(lf->data)
-        cJSON_AddStringToObject(root, "data", lf->data);
+        cJSON_AddStringToObject(data, "data", lf->data);
 
     if(lf->systemname)
-        cJSON_AddStringToObject(root, "system_name", lf->systemname);
+        cJSON_AddStringToObject(data, "system_name", lf->systemname);
 
     // DecoderInfo
     if(lf->decoder_info) {
@@ -234,7 +282,7 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
         if (lf->fields && !lf->filename) {
             for (i = 0; i < lf->nfields; i++) {
                 if (lf->fields[i].value) {
-                    W_JSON_AddField(root, lf->fields[i].key, lf->fields[i].value);
+                    W_JSON_AddField(data, lf->fields[i].key, lf->fields[i].value);
                 }
             }
         }
@@ -256,6 +304,14 @@ char* Eventinfo_to_jsonstr(const Eventinfo* lf)
 
     if (lf->previous)
         cJSON_AddStringToObject(root, "previous_log", lf->previous);
+
+    // Insert data object only if it has children
+
+    if (data->child) {
+        cJSON_AddItemToObject(root, "data", data);
+    } else {
+        cJSON_Delete(data);
+    }
 
     W_ParseJSON(root, lf);
     out = cJSON_PrintUnformatted(root);

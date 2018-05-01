@@ -24,17 +24,6 @@
 
 #include "shared.h"
 #include "check_cert.h"
-
-#ifndef LIBOPENSSL_ENABLED
-
-int main()
-{
-    printf("ERROR: Not compiled. Missing OpenSSL support.\n");
-    exit(0);
-}
-
-#else
-
 #include <openssl/ssl.h>
 #include "auth.h"
 
@@ -47,7 +36,7 @@ static void help_agent_auth(void) __attribute__((noreturn));
 static void help_agent_auth()
 {
     print_header();
-    print_out("  %s: -[Vhdt] [-g group] [-D dir] [-m IP address] [-p port] [-A name] [-v path] [-x path] [-k path] [-P pass]", ARGV0);
+    print_out("  %s: -[VhdtI] [-g group] [-D dir] [-m IP address] [-p port] [-A name] [-c ciphers] [-v path] [-x path] [-k path] [-P pass] [-G group] [-i IP address]", ARGV0);
     print_out("    -V          Version and license message");
     print_out("    -h          This help message");
     print_out("    -d          Execute in debug mode. This parameter");
@@ -59,11 +48,15 @@ static void help_agent_auth()
     print_out("    -m <addr>   Manager IP address");
     print_out("    -p <port>   Manager port (default: %d)", DEFAULT_PORT);
     print_out("    -A <name>   Agent name (default: hostname)");
+    print_out("    -c          SSL cipher list (default: %s)", DEFAULT_CIPHERS);
     print_out("    -v <path>   Full path to CA certificate used to verify the server");
     print_out("    -x <path>   Full path to agent certificate");
     print_out("    -k <path>   Full path to agent key");
     print_out("    -P <pass>   Authorization password");
     print_out("    -a          Auto select SSL/TLS method. Default: TLS v1.2 only.");
+    print_out("    -G <group>  Set the group for centralized configuration");
+    print_out("    -I <IP>     Set the agent IP address");
+    print_out("    -i          Let the agent IP address be set by the manager connection");
     print_out(" ");
     exit(1);
 }
@@ -79,6 +72,7 @@ int main(int argc, char **argv)
 #endif
 
     int sock = 0, port = DEFAULT_PORT, ret = 0;
+    char *ciphers = DEFAULT_CIPHERS;
     const char *dir = DEFAULTDIR;
     const char *group = GROUPGLOBAL;
     char *authpass = NULL;
@@ -88,6 +82,9 @@ int main(int argc, char **argv)
     const char *agent_cert = NULL;
     const char *agent_key = NULL;
     const char *ca_cert = NULL;
+    const char *centralized_group = NULL;
+    const char *sender_ip = NULL;
+    int use_src_ip = 0;
     char lhostname[512 + 1];
     char buf[4096 + 1];
     SSL_CTX *ctx;
@@ -103,7 +100,7 @@ int main(int argc, char **argv)
     /* Set the name */
     OS_SetName(ARGV0);
 
-    while ((c = getopt(argc, argv, "Vdhtg:m:p:A:v:x:k:D:P:a")) != -1) {
+    while ((c = getopt(argc, argv, "VdhtgG:m:p:A:c:v:x:k:D:P:a:I:i")) != -1) {
         switch (c) {
             case 'V':
                 print_version();
@@ -150,6 +147,12 @@ int main(int argc, char **argv)
                     merror_exit("Invalid port: %s", optarg);
                 }
                 break;
+            case 'c':
+                if (!optarg) {
+                    merror_exit("-%c needs an argument", c);
+                }
+                ciphers = optarg;
+                break;
             case 'v':
                 if (!optarg) {
                     merror_exit("-%c needs an argument", c);
@@ -177,6 +180,21 @@ int main(int argc, char **argv)
             case 'a':
                 auto_method = 1;
                 break;
+            case 'G':
+                if(!optarg){
+                    merror_exit("-%c needs an argument",c);
+                }
+                centralized_group = optarg;
+                break;
+            case 'I':
+                if(!optarg){
+                    merror_exit("-%c needs an argument",c);
+                }
+                sender_ip = optarg;
+                break;
+            case 'i':
+                use_src_ip = 1;
+                break;
             default:
                 help_agent_auth();
                 break;
@@ -191,6 +209,11 @@ int main(int argc, char **argv)
     gid = Privsep_GetGroup(group);
     if (gid == (gid_t) - 1) {
         merror_exit(USER_ERROR, "", group);
+    }
+
+    if (sender_ip && use_src_ip) {
+        merror("Options '-I' and '-i' are uncompatible.");
+        exit(1);
     }
 
     /* Exit here if test config is set */
@@ -229,13 +252,9 @@ int main(int argc, char **argv)
         agentname = lhostname;
     }
 
-#ifdef LEGACY_SSL
-    auto_method = 1;
-    mwarn("TLS v1.2 method-forcing disabled. This program was compiled to use SSL/TLS auto-negotiation.");
-#endif
 
     /* Start SSL */
-    ctx = os_ssl_keys(0, dir, agent_cert, agent_key, ca_cert, auto_method);
+    ctx = os_ssl_keys(0, dir, ciphers, agent_cert, agent_key, ca_cert, auto_method);
     if (!ctx) {
         merror("SSL error. Exiting.");
         exit(1);
@@ -307,7 +326,7 @@ int main(int argc, char **argv)
      * this to do the additional validation on IP addresses as well if needed.
      */
     if (ca_cert) {
-        printf("INFO: Verifing manager's certificate\n");
+        printf("INFO: Verifying manager's certificate\n");
         if (check_x509_cert(ssl, manager) != VERIFY_TRUE) {
             mdebug1("Unable to verify server certificate.");
             exit(1);
@@ -317,11 +336,33 @@ int main(int argc, char **argv)
     printf("INFO: Using agent name as: %s\n", agentname);
 
     if (authpass) {
-        snprintf(buf, 2048, "OSSEC PASS: %s OSSEC A:'%s'\n", authpass, agentname);
+        snprintf(buf, 2048, "OSSEC PASS: %s OSSEC A:'%s'", authpass, agentname);
     }
     else {
-        snprintf(buf, 2048, "OSSEC A:'%s'\n", agentname);
+        snprintf(buf, 2048, "OSSEC A:'%s'", agentname);
     }
+
+    if(centralized_group){
+        char opt_buf[256] = {0};
+        snprintf(opt_buf,254," G:'%s'",centralized_group);
+        strncat(buf,opt_buf,254);
+    }
+
+    if(sender_ip){
+        char opt_buf[256] = {0};
+        snprintf(opt_buf,254," IP:'%s'",sender_ip);
+        strncat(buf,opt_buf,254);
+    }
+
+    if(use_src_ip)
+    {
+        char opt_buf[10] = {0};
+        snprintf(opt_buf,10," IP:'src'");
+        strncat(buf,opt_buf,10);
+    }
+
+    /* Append new line character */
+    strncat(buf,"\n",1);
 
     ret = SSL_write(ssl, buf, strlen(buf));
     if (ret < 0) {
@@ -367,7 +408,10 @@ int main(int argc, char **argv)
 
                     {
                         FILE *fp;
+
+                        umask(0026);
                         fp = fopen(KEYSFILE_PATH, "w");
+
                         if (!fp) {
                             printf("ERROR: Unable to open key file: %s", KEYSFILE_PATH);
                             exit(1);
@@ -404,5 +448,3 @@ int main(int argc, char **argv)
 
     exit(0);
 }
-
-#endif /* LIBOPENSSL_ENABLED */

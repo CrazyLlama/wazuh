@@ -19,14 +19,18 @@
 static FILE *fp = NULL;
 static char file_sum[34] = "";
 static char file[OS_SIZE_1024 + 1] = "";
+static const char * IGNORE_LIST[] = { SHAREDCFG_FILENAME, NULL };
 
+// TODO: Remove calls for WIN32
 
 /* Receive events from the server */
 int receive_msg()
 {
     ssize_t recv_b;
-    netsize_t length;
+    uint32_t length;
+    size_t msg_length;
     int reads = 0;
+    int undefined_msg_logged = 0;
     char buffer[OS_MAXSTR + 1];
     char cleartext[OS_MAXSTR + 1];
     char *tmp_msg;
@@ -36,27 +40,47 @@ int receive_msg()
 
     /* Read until no more messages are available */
     while (1) {
-        if (agt->protocol == TCP_PROTO) {
+        if (agt->server[agt->rip_id].protocol == TCP_PROTO) {
             /* Only one read per call */
             if (reads++) {
                 break;
             }
 
             recv_b = recv(agt->sock, (char*)&length, sizeof(length), MSG_WAITALL);
+            length = wnet_order(length);
 
-            /* Manager disconnected */
-            if (recv_b <= 0) {
+            // Manager disconnected or error
+
+            switch (recv_b) {
+            case -1:
+                if (errno == ENOTCONN) {
+                    mdebug1("Manager disconnected (ENOTCONN).");
+                } else {
+                    merror("Connection socket: %s (%d)", strerror(errno), errno);
+                }
                 return -1;
-            } else if (length <= 0)
-                continue;
 
+            case 0:
+                mdebug1("Manager disconnected.");
+                return -1;
+
+            default:
+                // length > OS_MAXSTR
+                if(length == 0){
+                	merror("Empty message from manager");
+                	return 0;
+                }else if(length > OS_MAXSTR){
+                	merror("Too big message size from manager.");
+                	return 0;
+                }    
+            }
+            
             recv_b = recv(agt->sock, buffer, length, MSG_WAITALL);
 
-            if (recv_b != length) {
-                merror(RECV_ERROR);
-                continue;
+            if (recv_b != (ssize_t)length) {
+                merror("Incorrect message size from manager: expecting %u, got %d", length, (int)recv_b);
+                break;
             }
-
         } else {
             recv_b = recv(agt->sock, buffer, OS_SIZE_1024, MSG_DONTWAIT);
 
@@ -67,20 +91,25 @@ int receive_msg()
 
         buffer[recv_b] = '\0';
 
-        tmp_msg = ReadSecMSG(&keys, buffer, cleartext, 0, recv_b - 1, agt->rip[agt->rip_id]);
+        tmp_msg = ReadSecMSG(&keys, buffer, cleartext, 0, recv_b - 1, &msg_length, agt->server[agt->rip_id].rip);
         if (tmp_msg == NULL) {
-            mwarn(MSG_ERROR, agt->rip[agt->rip_id]);
+            mwarn(MSG_ERROR, agt->server[agt->rip_id].rip);
             continue;
         }
 
+        mdebug2("Received message: '%s'", tmp_msg);
+
         /* Check for commands */
         if (IsValidHeader(tmp_msg)) {
+            undefined_msg_logged = 0;
+
             available_server = (int)time(NULL);
+            update_ack(available_server);
 
 #ifdef WIN32
             /* Run timeout commands */
             if (agt->execdq >= 0) {
-                WinTimeoutRun(available_server);
+                WinTimeoutRun();
             }
 #endif
 
@@ -111,6 +140,12 @@ int receive_msg()
 
             /* Ack from server */
             else if (strcmp(tmp_msg, HC_ACK) == 0) {
+                continue;
+            }
+
+            // Request from manager (or request ack)
+            else if (IS_REQ(tmp_msg)) {
+                req_push(tmp_msg + strlen(HC_REQUEST), msg_length - strlen(HC_REQUEST) - 3);
                 continue;
             }
 
@@ -195,7 +230,20 @@ int receive_msg()
                         final_file = strrchr(file, '/');
                         if (final_file) {
                             if (strcmp(final_file + 1, SHAREDCFG_FILENAME) == 0) {
-                                UnmergeFiles(file, SHAREDCFG_DIR);
+                                if (cldir_ex_ignore(SHAREDCFG_DIR, IGNORE_LIST)) {
+                                    mwarn("Could not clean up shared directory.");
+                                }
+
+                                UnmergeFiles(file, SHAREDCFG_DIR, OS_TEXT);
+
+                                if (agt->flags.remote_conf && !verifyRemoteConf()) {
+                                    if (agt->flags.auto_restart) {
+                                        minfo("Agent is restarting due to shared configuration changes.");
+                                        restartAgent();
+                                    } else {
+                                        minfo("Shared agent configuration has been updated.");
+                                    }
+                                }
                             }
                         } else {
                             /* Remove file */
@@ -214,11 +262,13 @@ int receive_msg()
 
         else if (fp) {
             available_server = (int)time(NULL);
+            update_ack(available_server);
             fprintf(fp, "%s", tmp_msg);
         }
 
-        else {
-            mwarn("Unknown message received. No action defined.");
+        else if (!undefined_msg_logged) {
+            mwarn("Unknown message received. No action defined. Maybe restarted while receiving merged file?");
+            undefined_msg_logged = 1;
         }
     }
 

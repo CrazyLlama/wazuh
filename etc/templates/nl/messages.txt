@@ -21,8 +21,8 @@ system="Systeem"
 user="Gebruiker"
 host="Host"
 hitanyorabort="Druk op ENTER om door te gaan of Ctrl-C om af te breken."
-whattoinstall="Wat voor soort installatie wilt u doen (server, agent, local of help)?"
-serverchose="Gekozen voor server installatie"
+whattoinstall="Wat voor soort installatie wilt u doen (manager, agent, local of help)?"
+serverchose="Gekozen voor manager (server) installatie"
 clientchose="Gekozen voor agent(client) installatie"
 localchose="Gekozen voor lokale installatie"
 
@@ -84,8 +84,16 @@ yessyslog="Externe systeem logging ingeschakeld"
 # Part 3.4/3.5
 readlogs="Systeem instellen om de volgende logbestanden te controleren:"
 
-# Part 5
+# Part 3.7
+runauthd="Wilt u de Auth-service uitvoeren?"
+norunauthd="Niet uitgevoerd Auth service"
+yesrunauthd="Starten Auth service"
+
+# Part 4
 installing="Bezig met installeren van het systeem"
+startwazuh="Wilt u na de installatie Wazuh starten?"
+nowazuhstart="Wazuh start niet aan het einde van de installatie."
+yeswazuhstart="Wazuh start aan het einde van de installatie."
 runningmake="Uitvoeren van Makefile"
 
 # Final
@@ -113,3 +121,7 @@ pfenable="Wilt u de PF firewall gebruiken bij actief handelen?"
 nopf="PF respons is uitgeschakeld."
 pftablename="Naam van de PF tabel om te gebruiken?"
 pfmessage="Voeg de volgende regels toe aan het begin van uw PF regels"
+
+# CA store
+addcastore="Wilt u meer certificaten toevoegen?"
+castore="Voer het pad in op een X509-certificaat of een certificaatmap: "

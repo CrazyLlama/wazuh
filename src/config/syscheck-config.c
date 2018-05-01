@@ -93,8 +93,6 @@ void dump_registry_ignore(syscheck_config *syscheck, char *entry, int arch) {
     int ign_size = 0;
 
     if (syscheck->registry_ignore) {
-        int ign_size;
-
         /* We do not add duplicated entries */
         for (ign_size = 0; syscheck->registry_ignore[ign_size].entry; ign_size++)
             if (syscheck->registry_ignore[ign_size].arch == arch &&
@@ -235,6 +233,7 @@ static int read_attr(syscheck_config *syscheck, const char *dirs, char **g_attrs
     const char *xml_real_time = "realtime";
     const char *xml_report_changes = "report_changes";
     const char *xml_restrict = "restrict";
+    const char *xml_check_sha256sum = "check_sha256sum";
 
     char *restrictfile = NULL;
     char **dir;
@@ -293,6 +292,7 @@ static int read_attr(syscheck_config *syscheck, const char *dirs, char **g_attrs
                 if (strcmp(*values, "yes") == 0) {
                     opts |= CHECK_MD5SUM;
                     opts |= CHECK_SHA1SUM;
+                    opts |= CHECK_SHA256SUM;
                     opts |= CHECK_PERM;
                     opts |= CHECK_SIZE;
                     opts |= CHECK_OWNER;
@@ -300,7 +300,7 @@ static int read_attr(syscheck_config *syscheck, const char *dirs, char **g_attrs
                     opts |= CHECK_MTIME;
                     opts |= CHECK_INODE;
                 } else if (strcmp(*values, "no") == 0) {
-		    opts &= ~ ( CHECK_MD5SUM | CHECK_SHA1SUM | CHECK_PERM
+		    opts &= ~ ( CHECK_MD5SUM | CHECK_SHA1SUM | CHECK_PERM | CHECK_SHA256SUM
 		       | CHECK_SIZE | CHECK_OWNER | CHECK_GROUP | CHECK_MTIME | CHECK_INODE );
                 } else {
                     merror(SK_INV_OPT, *values, *attrs);
@@ -313,8 +313,9 @@ static int read_attr(syscheck_config *syscheck, const char *dirs, char **g_attrs
                 if (strcmp(*values, "yes") == 0) {
                     opts |= CHECK_MD5SUM;
                     opts |= CHECK_SHA1SUM;
+                    opts |= CHECK_SHA256SUM;
                 } else if (strcmp(*values, "no") == 0) {
-		    opts &= ~ ( CHECK_MD5SUM | CHECK_SHA1SUM );
+		    opts &= ~ ( CHECK_MD5SUM | CHECK_SHA1SUM | CHECK_SHA256SUM);
                 } else {
                     merror(SK_INV_OPT, *values, *attrs);
                     ret = 0;
@@ -339,6 +340,18 @@ static int read_attr(syscheck_config *syscheck, const char *dirs, char **g_attrs
                     opts |= CHECK_SHA1SUM;
                 } else if (strcmp(*values, "no") == 0) {
 		    opts &= ~ CHECK_SHA1SUM;
+                } else {
+                    merror(SK_INV_OPT, *values, *attrs);
+                    ret = 0;
+                    goto out_free;
+                }
+            }
+            /* Check sha256sum */
+            else if (strcmp(*attrs, xml_check_sha256sum) == 0) {
+                if (strcmp(*values, "yes") == 0) {
+                    opts |= CHECK_SHA256SUM;
+                } else if (strcmp(*values, "no") == 0) {
+                    opts &= ~ CHECK_SHA256SUM;
                 } else {
                     merror(SK_INV_OPT, *values, *attrs);
                     ret = 0;
@@ -935,6 +948,7 @@ char *syscheck_opts2str(char *buf, int buflen, int opts) {
         CHECK_GROUP,
         CHECK_MD5SUM,
         CHECK_SHA1SUM,
+        CHECK_SHA256SUM,
         CHECK_REALTIME,
         CHECK_SEECHANGES,
         CHECK_MTIME,
@@ -948,6 +962,7 @@ char *syscheck_opts2str(char *buf, int buflen, int opts) {
         "group",
     	"md5sum",
         "sha1sum",
+        "sha256sum",
         "realtime",
         "report_changes",
         "mtime",
@@ -969,3 +984,102 @@ char *syscheck_opts2str(char *buf, int buflen, int opts) {
 
     return buf;
     }
+
+int Test_Syscheck(const char * path){
+    int fail = 0;
+    syscheck_config test_syscheck = { .tsleep = 0 };
+
+    if (ReadConfig(CAGENT_CONFIG | CSYSCHECK, path, &test_syscheck, NULL) < 0) {
+		merror(RCONFIG_ERROR,"Syscheck", path);
+		fail = 1;
+	}
+
+    Free_Syscheck(&test_syscheck);
+
+    if (fail) {
+        return -1;
+    } else {
+        return 0;
+    }
+}
+
+void Free_Syscheck(syscheck_config * config) {
+    if (config) {
+        int i;
+        free(config->opts);
+        free(config->remote_db);
+        free(config->db);
+        free(config->scan_day);
+        free(config->scan_time);
+        if (config->ignore) {
+            for (i=0; config->ignore[i] != NULL; i++) {
+                free(config->ignore[i]);
+            }
+            free(config->ignore);
+        }
+        if (config->ignore_regex) {
+            for (i=0; config->ignore_regex[i] != NULL; i++) {
+                OSMatch_FreePattern(config->ignore_regex[i]);
+            }
+            free(config->ignore_regex);
+        }
+        if (config->nodiff) {
+            for (i=0; config->nodiff[i] != NULL; i++) {
+                free(config->nodiff[i]);
+            }
+            free(config->nodiff);
+        }
+        if (config->nodiff_regex) {
+            for (i=0; config->nodiff_regex[i] != NULL; i++) {
+                OSMatch_FreePattern(config->nodiff_regex[i]);
+            }
+        }
+        if (config->dir) {
+            for (i=0; config->dir[i] != NULL; i++) {
+                free(config->dir[i]);
+                if(config->filerestrict[i]) {
+                    OSMatch_FreePattern(config->filerestrict[i]);
+                    free(config->filerestrict[i]);
+                }
+            }
+            free(config->dir);
+            free(config->filerestrict);
+        }
+
+    #ifdef WIN32
+        if (config->registry_ignore) {
+            for (i=0; config->registry_ignore[i].entry != NULL; i++) {
+                free(config->registry_ignore[i].entry);
+            }
+            free(config->registry_ignore);
+        }
+        if (config->registry_ignore_regex) {
+            for (i=0; config->registry_ignore_regex[i].regex != NULL; i++) {
+                OSMatch_FreePattern(config->registry_ignore_regex[i].regex);
+            }
+            free(config->registry_ignore_regex);
+        }
+        if (config->registry) {
+            for (i=0; config->registry[i].entry != NULL; i++) {
+                free(config->registry[i].entry);
+            }
+            free(config->registry);
+        }
+        if (config->reg_fp) {
+            fclose(config->reg_fp);
+        }
+    #endif
+        if (config->fp) {
+            OSHash_Free(config->fp);
+        }
+
+        if (config->realtime) {
+            OSHash_Free(config->realtime->dirtb);
+#ifdef WIN32
+            CloseEventLog(config->realtime->evt);
+#endif
+            free(config->realtime);
+        }
+        free(config->prefilter_cmd);
+    }
+}

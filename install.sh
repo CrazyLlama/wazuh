@@ -62,6 +62,7 @@ Install()
     echo ""
     echo "4- ${installing}"
 
+    echo ""
     echo "DIR=\"${INSTALLDIR}\"" > ${LOCATION}
 
     # Changing Config.OS with the new C flags
@@ -86,18 +87,35 @@ Install()
   	    MAKEBIN=gmake
     elif [ "X$NUNAME" = "XSunOS" ]; then
 	      MAKEBIN=gmake
+    elif [ "X$NUNAME" = "XHP-UX" ]; then
+          MAKEBIN=/usr/local/bin/gmake
+    elif [ "X$NUNAME" = "XAIX" ]; then
+          MAKEBIN=/opt/freeware/bin/gmake
+    fi
+
+    # On CentOS <= 5 we need to disable syscollector compilation
+    OS_VERSION_FOR_SYSC="${DIST_NAME}"
+    SYSC_FLAG=""
+
+    if ([ "X${OS_VERSION_FOR_SYSC}" = "Xrhel" ] || [ "X${OS_VERSION_FOR_SYSC}" = "Xcentos" ] || [ "X${OS_VERSION_FOR_SYSC}" = "XCentOS" ]) && [ ${DIST_VER} -le 5 ]; then
+        SYSC_FLAG="DISABLE_SYSC=true"
     fi
 
 
     # Makefile
     echo " - ${runningmake}"
+    echo ""
+
     cd ./src
 
     # Binary install will use the previous generated code.
     if [ "X${USER_BINARYINSTALL}" = "X" ]; then
+        # Download external libraries if missing
+        find external/* > /dev/null 2>&1 || ${MAKEBIN} deps
+
         # Add DATABASE=pgsql or DATABASE=mysql to add support for database
         # alert entry
-        ${MAKEBIN} PREFIX=${INSTALLDIR} TARGET=${INSTYPE} build
+        ${MAKEBIN} PREFIX=${INSTALLDIR} TARGET=${INSTYPE} ${SYSC_FLAG} -j${THREADS} build
         if [ $? != 0 ]; then
             cd ../
             catError "0x5-build"
@@ -106,10 +124,12 @@ Install()
 
     # If update, stop ossec
     if [ "X${update_only}" = "Xyes" ]; then
+        echo "Stopping Wazuh..."
         UpdateStopOSSEC
     fi
 
-    ${MAKEBIN} PREFIX=${INSTALLDIR} TARGET=${INSTYPE} install
+    # Install
+    InstallWazuh
 
     cd ../
 
@@ -132,7 +152,13 @@ Install()
         WazuhUpgrade
         # Update versions previous to Wazuh 1.2
         UpdateOldVersions
+        echo "Starting Wazuh..."
         UpdateStartOSSEC
+    fi
+
+    # Enable auth if selected
+    if [ "X$INSTYPE" = "Xserver" ] && [ "X${AUTHD}" = "Xyes" ]; then
+        $INSTALLDIR/bin/ossec-control enable auth
     fi
 
     # Calling the init script  to start ossec hids during boot
@@ -140,6 +166,9 @@ Install()
         runInit $INSTYPE
         if [ $? = 1 ]; then
             notmodified="yes"
+        elif [ "X$START_WAZUH" = "Xyes" ]; then
+            echo "Starting Wazuh..."
+            UpdateStartOSSEC
         fi
     fi
 
@@ -223,6 +252,62 @@ UseOpenSCAP()
     esac
 }
 
+##########
+# EnableAuthd()
+##########
+EnableAuthd()
+{
+    # Authd config
+    NB=$1
+    echo ""
+    $ECHO "  $NB - ${runauthd} ($yes/$no) [$no]: "
+    if [ "X${USER_ENABLE_AUTHD}" = "X" ]; then
+        read AS
+    else
+        AS=${USER_ENABLE_AUTHD}
+    fi
+    echo ""
+    case $AS in
+        $yesmatch)
+            AUTHD="yes"
+            echo "   - ${yesrunauthd}."
+            ;;
+        *)
+            AUTHD="no"
+            echo "   - ${norunauthd}."
+            ;;
+    esac
+}
+
+##########
+# ConfigureBoot()
+##########
+ConfigureBoot()
+{
+    NB=$1
+    if [ "X$INSTYPE" != "Xagent" ]; then
+
+        echo ""
+        $ECHO "  $NB- ${startwazuh} ($yes/$no) [$yes]: "
+
+        if [ "X${USER_AUTO_START}" = "X" ]; then
+            read ANSWER
+        else
+            ANSWER=${USER_AUTO_START}
+        fi
+
+        echo ""
+        case $ANSWER in
+            $nomatch)
+                echo "   - ${nowazuhstart}"
+                ;;
+            *)
+                START_WAZUH="yes"
+                echo "   - ${yeswazuhstart}"
+                ;;
+        esac
+    fi
+}
 
 ##########
 # SetupLogs()
@@ -305,13 +390,18 @@ ConfigureClient()
         *)
             ACTIVERESPONSE="yes"
             echo ""
+            echo "   - ${yesactive}."
             ;;
     esac
 
-    # Set up the log files
-    SetupLogs "3.6"
+    # Set up CA store
+    catMsg "0x109-castore"
+    AddCAStore
 
-    # echo "</ossec_config>" >> $NEWCONFIG
+    # Set up the log files
+    SetupLogs "3.7"
+
+    # Write configuration
     WriteAgent
 }
 
@@ -422,7 +512,7 @@ ConfigureServer()
 
     for ip in ${NAMESERVERS} ${NAMESERVERS2};
     do
-    if [ ! "X${ip}" = "X" ]; then
+    if [ ! "X${ip}" = "X" -a ! "${ip}" = "0.0.0.0" ]; then
         echo "      - ${ip}"
     fi
     done
@@ -455,11 +545,17 @@ ConfigureServer()
       SLOG="yes"
     fi
 
-    # Setting up the logs
-    SetupLogs "3.7"
-
-    WriteManager
-
+    # Setting up the auth daemon & logs
+    if [ "X$INSTYPE" = "Xserver" ]; then
+        EnableAuthd "3.7"
+        ConfigureBoot "3.8"
+        SetupLogs "3.9"
+        WriteManager
+    else
+        ConfigureBoot "3.6"
+        SetupLogs "3.7"
+        WriteLocal
+    fi
 }
 
 ##########
@@ -513,8 +609,11 @@ setEnv()
 
         case $ANSWER in
             $yesmatch)
+                echo "      Stopping Wazuh..."
+                UpdateStopOSSEC
                 rm -rf $INSTALLDIR
                 if [ ! $? = 0 ]; then
+                    echo "Error deleting ${INSTALLDIR}"
                     exit 2;
                 fi
                 ;;
@@ -556,7 +655,7 @@ AddWhite()
         if [ "X${USER_WHITE_LIST}" = "X" ]; then
             read ANSWER
         else
-            ANSWER=$yes
+            ANSWER=${USER_WHITE_LIST}
         fi
 
         if [ "X${ANSWER}" = "X" ] ; then
@@ -580,6 +679,64 @@ AddWhite()
                 ;;
         esac
     done
+}
+
+##########
+# AddCAStore()
+##########
+AddCAStore()
+{
+    while [ 1 ]
+    do
+        echo ""
+        $ECHO "   - ${addcastore} ($yes/$no)? [$no]: "
+
+        # If white list is set, we don't need to ask it here.
+        if [ "X${USER_CA_STORE}" = "X" ]; then
+            read ANSWER
+        else
+            ANSWER=${USER_CA_STORE}
+        fi
+
+        if [ "X${ANSWER}" = "X" ] ; then
+            ANSWER=$no
+        fi
+
+        case $ANSWER in
+            $no)
+                break;
+                ;;
+            *)
+                SET_CA_STORE="true"
+                $ECHO "   - ${castore}"
+                if [ "X${USER_CA_STORE}" = "X" ]; then
+                    read CA_STORE
+                else
+                    CA_STORE=${USER_CA_STORE}
+                fi
+
+                break;
+                ;;
+        esac
+    done
+
+    # Check the certificate
+
+    if [ -n "$CA_STORE" ]
+    then
+        if [ -f $CA_STORE ]
+        then
+            if hash openssl 2>&1 > /dev/null && [ $(date -d "$(openssl x509 -enddate -noout -in $CA_STORE | cut -d = -f 2)" +%s) -lt $(date +%s) ]
+            then
+                echo ""
+                echo "     Warning: the certificate at \"$CA_STORE\" is expired."
+            fi
+        elif [ ! -d $CA_STORE ]
+        then
+            echo ""
+            echo "     Warning: No such file or directory \"$CA_STORE\"."
+        fi
+    fi
 }
 
 
@@ -688,7 +845,7 @@ main()
     fi
 
     # Initial message
-    echo " $NAME $VERSION ${installscript} - http://www.wazuh.com"
+    echo " $NAME $VERSION (Rev. $REVISION) ${installscript} - http://www.wazuh.com"
     catMsg "0x101-initial"
     echo ""
     echo "  - $system: $UNAME (${DIST_NAME} ${DIST_VER}.${DIST_SUBVER})"
@@ -785,14 +942,14 @@ main()
                     catMsg "0x102-installhelp"
                 ;;
 
-                ${server}|${serverm})
+                ${server}|${serverm}|"manager"|"m")
                     echo ""
                     echo "  - ${serverchose}."
                     INSTYPE="server"
                     break;
                 ;;
 
-                ${agent}|${agentm})
+                ${agent}|${agentm}|"a")
                     echo ""
                     echo "  - ${clientchose}."
                     INSTYPE="agent"

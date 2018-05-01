@@ -11,9 +11,9 @@
  */
 
 #include "shared.h"
+#include "version_op.h"
 
 #ifndef WIN32
-#include <libgen.h>
 #include <regex.h>
 #else
 #include <aclapi.h>
@@ -21,6 +21,7 @@
 
 /* Vista product information */
 #ifdef WIN32
+
 #ifndef PRODUCT_UNLICENSED
 #define PRODUCT_UNLICENSED 0xABCDABCD
 #endif
@@ -47,6 +48,13 @@
 #endif
 #ifndef PRODUCT_CLUSTER_SERVER_C
 #define PRODUCT_CLUSTER_SERVER_C "Cluster Server Edition "
+#endif
+
+#ifndef PRODUCT_CLUSTER_SERVER_V
+#define PRODUCT_CLUSTER_SERVER_V 0x00000040
+#endif
+#ifndef PRODUCT_CLUSTER_SERVER_V_C
+#define PRODUCT_CLUSTER_SERVER_V_C "Server Hyper Core V "
 #endif
 
 #ifndef PRODUCT_DATACENTER_SERVER
@@ -293,11 +301,81 @@
 #ifndef PRODUCT_WEB_SERVER_CORE_C
 #define PRODUCT_WEB_SERVER_CORE_C "Web Server Edition "
 #endif
-#endif /* WIN32 */
 
-#ifdef WIN32
-#define mkstemp(x) 0
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_ADDL
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_ADDL 0x0000003C
 #endif
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_ADDL_C
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_ADDL_C "Essential Server Solution Additional "
+#endif
+
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_ADDLSVC
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_ADDLSVC 0x0000003E
+#endif
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_ADDLSVC_C
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_ADDLSVC_C "Essential Server Solution Additional SVC "
+#endif
+
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_MGMT
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_MGMT 0x0000003B
+#endif
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_MGMT_C
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_MGMT_C "Essential Server Solution Management "
+#endif
+
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_MGMTSVC
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_MGMTSVC 0x0000003D
+#endif
+#ifndef PRODUCT_ESSENTIALBUSINESS_SERVER_MGMTSVC_C
+#define PRODUCT_ESSENTIALBUSINESS_SERVER_MGMTSVC_C "Essential Server Solution Management SVC "
+#endif
+
+#ifndef PRODUCT_HOME_PREMIUM_SERVER
+#define PRODUCT_HOME_PREMIUM_SERVER 0x00000022
+#endif
+#ifndef PRODUCT_HOME_PREMIUM_SERVER_C
+#define PRODUCT_HOME_PREMIUM_SERVER_C "Home Server 2011 "
+#endif
+
+#ifndef PRODUCT_HYPERV
+#define PRODUCT_HYPERV 0x0000002A
+#endif
+#ifndef PRODUCT_HYPERV_C
+#define PRODUCT_HYPERV_C "Hyper-V Server "
+#endif
+
+#ifndef PRODUCT_MULTIPOINT_PREMIUM_SERVER
+#define PRODUCT_MULTIPOINT_PREMIUM_SERVER 0x0000004D
+#endif
+#ifndef PRODUCT_MULTIPOINT_PREMIUM_SERVER_C
+#define PRODUCT_MULTIPOINT_PREMIUM_SERVER_C "MultiPoint Server Premium (full installation) "
+#endif
+
+#ifndef PRODUCT_MULTIPOINT_STANDARD_SERVER
+#define PRODUCT_MULTIPOINT_STANDARD_SERVER 0x0000004C
+#endif
+#ifndef PRODUCT_MULTIPOINT_STANDARD_SERVER_C
+#define PRODUCT_MULTIPOINT_STANDARD_SERVER_C "MultiPoint Server Standard (full installation) "
+#endif
+
+#ifndef PRODUCT_STANDARD_SERVER_SOLUTIONS
+#define PRODUCT_STANDARD_SERVER_SOLUTIONS 0x00000034
+#endif
+#ifndef PRODUCT_STANDARD_SERVER_SOLUTIONS_C
+#define PRODUCT_STANDARD_SERVER_SOLUTIONS_C "Server Solutions Premium "
+#endif
+
+#ifndef PRODUCT_STORAGE_WORKGROUP_SERVER_CORE
+#define PRODUCT_STORAGE_WORKGROUP_SERVER_CORE 0x0000002D
+#endif
+#ifndef PRODUCT_STORAGE_WORKGROUP_SERVER_CORE_C
+#define PRODUCT_STORAGE_WORKGROUP_SERVER_CORE_C "Storage Server Workgroup (core installation) "
+#endif
+
+#define mkstemp(x) 0
+#define mkdir(x, y) mkdir(x)
+
+#endif /* WIN32 */
 
 const char *__local_name = "unset";
 
@@ -343,6 +421,10 @@ int IsFile(const char *file)
 	return (!stat(file, &buf) && S_ISREG(buf.st_mode)) ? 0 : -1;
 }
 
+off_t FileSize(const char * path) {
+    struct stat buf;
+    return stat(path, &buf) ? -1 : buf.st_size;
+}
 
 int CreatePID(const char *name, int pid)
 {
@@ -419,17 +501,34 @@ int DeletePID(const char *name)
     return (0);
 }
 
-int UnmergeFiles(const char *finalpath, const char *optdir)
+void DeleteState() {
+    char path[PATH_MAX + 1];
+
+    if (strcmp(__local_name, "unset")) {
+#ifdef WIN32
+        snprintf(path, sizeof(path), "%s.state", __local_name);
+#else
+        snprintf(path, sizeof(path), "%s" OS_PIDFILE "/%s.state", isChroot() ? "" : DEFAULTDIR, __local_name);
+#endif
+        unlink(path);
+    } else {
+        merror("At DeleteState(): __local_name is unset.");
+    }
+}
+
+int UnmergeFiles(const char *finalpath, const char *optdir, int mode)
 {
     int ret = 1;
+    int state_ok;
     size_t i = 0, n = 0, files_size = 0;
     char *files;
+    char * copy;
     char final_name[2048 + 1];
     char buf[2048 + 1];
     FILE *fp;
     FILE *finalfp;
 
-    finalfp = fopen(finalpath, "r");
+    finalfp = fopen(finalpath, mode == OS_BINARY ? "rb" : "r");
     if (!finalfp) {
         merror("Unable to read merged file: '%s'.", finalpath);
         return (0);
@@ -460,19 +559,43 @@ int UnmergeFiles(const char *finalpath, const char *optdir)
             continue;
         }
         files++;
+        state_ok = 1;
 
         if (optdir) {
             snprintf(final_name, 2048, "%s/%s", optdir, files);
+
+            // Check that final_name is inside optdir
+
+            if (w_ref_parent_folder(final_name)) {
+                merror("Unmerging '%s': unable to unmerge '%s' (it contains '..')", finalpath, final_name);
+                state_ok = 0;
+            }
         } else {
             strncpy(final_name, files, 2048);
             final_name[2048] = '\0';
         }
 
+        // Create directory
+
+        copy = strdup(final_name);
+
+        if (mkdir_ex(dirname(copy))) {
+            merror("Unmerging '%s': couldn't create directory '%s'", finalpath, files);
+            state_ok = 0;
+        }
+
+        free(copy);
+
         /* Open filename */
-        fp = fopen(final_name, "w");
-        if (!fp) {
+
+        if (state_ok) {
+            if (fp = fopen(final_name, mode == OS_BINARY ? "wb" : "w"), !fp) {
+                ret = 0;
+                merror("Unable to unmerge file '%s'.", final_name);
+            }
+        } else {
+            fp = NULL;
             ret = 0;
-            merror("Unable to unmerge file '%s'.", final_name);
         }
 
         if (files_size < sizeof(buf) - 1) {
@@ -512,7 +635,99 @@ int UnmergeFiles(const char *finalpath, const char *optdir)
     return (ret);
 }
 
-int MergeAppendFile(const char *finalpath, const char *files)
+int TestUnmergeFiles(const char *finalpath, int mode)
+{
+    int ret = 1;
+    size_t i = 0, n = 0, files_size = 0, readed_bytes = 0,data_size = 0;
+    char *files;
+    char buf[2048 + 1];
+    FILE *finalfp;
+
+    finalfp = fopen(finalpath, mode == OS_BINARY ? "rb" : "r");
+    if (!finalfp) {
+        merror("Unable to read merged file: '%s'.", finalpath);
+        return (0);
+    }
+
+    while (1) {
+        /* Read header portion */
+        if (fgets(buf, sizeof(buf) - 1, finalfp) == NULL) {
+            break;
+        }
+
+        /* Initiator */
+        switch(buf[0]){
+            case '#':
+                continue;
+            case '!':
+                goto parse;
+            default:
+                ret = 0;
+                goto end;
+        }
+
+parse:
+        /* Get file size and name */
+        files_size = (size_t) atol(buf + 1);
+        data_size = files_size;
+
+        files = strchr(buf, '\n');
+        if (files) {
+            *files = '\0';
+        }
+
+        files = strchr(buf, ' ');
+        if (!files) {
+            ret = 0;
+            continue;
+        }
+        files++;
+
+        /* Check for file name */
+		if(*files == '\0')
+		{
+			ret = 0;
+            goto end;
+		}
+
+        if (files_size < sizeof(buf) - 1) {
+            i = files_size;
+            files_size = 0;
+        } else {
+            i = sizeof(buf) - 1;
+            files_size -= sizeof(buf) - 1;
+        }
+
+        readed_bytes = 0;
+        while ((n = fread(buf, 1, i, finalfp)) > 0) {
+            buf[n] = '\0';
+            readed_bytes += n;
+
+            if (files_size == 0) {
+                break;
+            } else {
+                if (files_size < sizeof(buf) - 1) {
+                    i = files_size;
+                    files_size = 0;
+                } else {
+                    i = sizeof(buf) - 1;
+                    files_size -= sizeof(buf) - 1;
+                }
+            }
+        }
+
+        if(readed_bytes != data_size){
+            ret = 0;
+            goto end;
+        }
+            
+    }
+end:
+    fclose(finalfp);
+    return (ret);
+}
+
+int MergeAppendFile(const char *finalpath, const char *files, const char *tag)
 {
     size_t n = 0;
     long files_size = 0;
@@ -528,6 +743,11 @@ int MergeAppendFile(const char *finalpath, const char *files)
             merror("Unable to create merged file: '%s'.", finalpath);
             return (0);
         }
+
+        if (tag) {
+            fprintf(finalfp, "#%s\n", tag);
+        }
+
         fclose(finalfp);
 
         if (chmod(finalpath, 0640) < 0) {
@@ -560,6 +780,11 @@ int MergeAppendFile(const char *finalpath, const char *files)
     } else {
         tmpfile = files;
     }
+
+    if (tag) {
+        fprintf(finalfp, "#%s\n", tag);
+    }
+
     fprintf(finalfp, "!%ld %s\n", files_size, tmpfile);
 
     fseek(fp, 0, SEEK_SET);
@@ -575,7 +800,7 @@ int MergeAppendFile(const char *finalpath, const char *files)
     return (1);
 }
 
-int MergeFiles(const char *finalpath, char **files)
+int MergeFiles(const char *finalpath, char **files, const char *tag)
 {
     int i = 0, ret = 1;
     size_t n = 0;
@@ -590,6 +815,10 @@ int MergeFiles(const char *finalpath, char **files)
     if (!finalfp) {
         merror("Unable to create merged file: '%s'.", finalpath);
         return (0);
+    }
+
+    if (tag) {
+        fprintf(finalfp, "#%s\n", tag);
     }
 
     while (files[i]) {
@@ -626,6 +855,89 @@ int MergeFiles(const char *finalpath, char **files)
 
     fclose(finalfp);
     return (ret);
+}
+
+int w_backup_file(File *file, const char *source) {
+    FILE *fp_src;
+    int fd;
+    char template[OS_FLSIZE + 1];
+    mode_t old_mask;
+
+	/* Check if source file exists */
+	FILE *fsource;
+	fsource = fopen(source,"r");
+
+	if(!fsource)
+	{
+        merror(FOPEN_ERROR, source, errno, strerror(errno));
+		return -1;
+	}
+
+    snprintf(template, OS_FLSIZE, "%s.backup", source);
+    old_mask = umask(0177);
+
+    fd = open(template,O_WRONLY | O_CREAT,old_mask);
+    umask(old_mask);
+
+    if (fd < 0) {
+        return -1;
+    }
+
+#ifndef WIN32
+    struct stat buf;
+
+    if (stat(source, &buf) == 0) {
+        if (fchmod(fd, buf.st_mode) < 0) {
+            close(fd);
+            unlink(template);
+            return -1;
+        }
+    } else {
+        mdebug1(FSTAT_ERROR, source, errno, strerror(errno));
+    }
+
+#endif
+
+    file->fp = fdopen(fd, "w");
+
+    if (!file->fp) {
+        close(fd);
+        unlink(template);
+        return -1;
+    }
+
+    
+    size_t count_r;
+    size_t count_w;
+    char buffer[4096];
+
+    if (fp_src = fopen(source, "r"), fp_src) {
+        while (!feof(fp_src)) {
+            count_r = fread(buffer, 1, 4096, fp_src);
+
+            if (ferror(fp_src)) {
+                fclose(fp_src);
+                fclose(file->fp);
+                unlink(template);
+                return -1;
+            }
+
+            count_w = fwrite(buffer, 1, count_r, file->fp);
+
+            if (count_w != count_r || ferror(file->fp)) {
+                fclose(fp_src);
+                fclose(file->fp);
+                unlink(template);
+                return -1;
+            }
+        }
+
+        fclose(fp_src);
+    }
+    
+
+    file->name = strdup(template);
+    return 0;
 }
 
 
@@ -680,328 +992,37 @@ int mkstemp_ex(char *tmp_path)
     return (0);
 }
 
-static const char *get_unix_version()
-{
-    FILE *os_release, *cmd_output, *version_release, *cmd_output_ver;
-    char buff[256];
-    static char string[256];
-    char *tag, *end;
-    char *name = NULL;
-    char *id = NULL;
-    char *version = NULL;
-
-    // Try to open /etc/os-release
-    os_release = fopen("/etc/os-release", "r");
-    // Try to open /usr/lib/os-release
-    if(!os_release) os_release = fopen("/usr/lib/os-release", "r");
-
-    if(os_release){
-        while (fgets(buff, sizeof(buff)- 1, os_release)) {
-            tag = strtok(buff, "=");
-            if (strcmp (tag,"NAME") == 0){
-                if (!name) {
-                    name = strtok(NULL, "\n");
-                    if (name[0] == '\"' && (end = strchr(++name, '\"'), end)) {
-                        *end = '\0';
-                    }
-                    name = strdup(name);
-                }
-            } else if (strcmp (tag,"VERSION") == 0){
-                if (!version) {
-                    version = strtok(NULL, "\n");
-                    if (version[0] == '\"' && (end = strchr(++version, '\"'), end)) {
-                        *end = '\0';
-                    }
-                    version = strdup(version);
-                }
-            } else if (strcmp (tag,"ID") == 0){
-                if (!id) {
-                    id = strtok(NULL, " \n");
-                    if (id[0] == '\"' && (end = strchr(++id, '\"'), end)) {
-                        *end = '\0';
-                    }
-                    id = strdup(id);
-                }
-            }
-        }
-        fclose(os_release);
-    }
-    // Linux old distributions without 'os-release' file
-    else {
-        regex_t regexCompiled;
-        regmatch_t match[2];
-        int match_size;
-        // CentOS
-        if (version_release = fopen("/etc/centos-release","r"), version_release){
-            name = strdup("CentOS Linux");
-            id = strdup("centos");
-            static const char *pattern = " ([0-9][0-9]*\\.[0-9][0-9]*)\\.*";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // Fedora
-        } else if (version_release = fopen("/etc/fedora-release","r"), version_release){
-            name = strdup("Fedora");
-            id = strdup("fedora");
-            static const char *pattern = " ([0-9][0-9]*) ";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // RedHat
-        } else if (version_release = fopen("/etc/redhat-release","r"), version_release){
-            static const char *pattern = "([0-9][0-9]*\\.[0-9][0-9]*)\\.*";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if (strstr(buff, "CentOS")){
-                    if (!(name || id)) {
-                        name = strdup("CentOS");
-                        id = strdup("centos");
-                    }
-                }else if (strstr(buff, "Fedora")){
-                    if (!(name || id)) {
-                        name = strdup("Fedora");
-                        id = strdup("fedora");
-                    }
-                }else{
-                    if (!(name || id)) {
-                        name = strdup("Red Hat Enterprise Linux");
-                        id = strdup("rhel");
-                    }
-                }
-
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // Ubuntu
-        } else if (version_release = fopen("/etc/lsb-release","r"), version_release){
-            name = strdup("Ubuntu");
-            id = strdup("ubuntu");
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                tag = strtok(buff, "=");
-                if (strcmp(tag,"DISTRIB_RELEASE") == 0){
-                    version = strdup(strtok(NULL, "\n"));
-                    break;
-                }
-            }
-
-            fclose(version_release);
-        // Gentoo
-        } else if (version_release = fopen("/etc/gentoo-release","r"), version_release){
-            name = strdup("Gentoo");
-            id = strdup("gentoo");
-            static const char *pattern = " ([0-9][0-9]*\\.[0-9][0-9]*)\\.*";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // SuSE
-        } else if (version_release = fopen("/etc/SuSE-release","r"), version_release){
-            name = strdup("SuSE Linux");
-            id = strdup("suse");
-            static const char *pattern = ".*VERSION = ([0-9][0-9]*)";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // Arch
-        } else if (version_release = fopen("/etc/arch-release","r"), version_release){
-            name = strdup("Arch Linux");
-            id = strdup("arch");
-            static const char *pattern = "([0-9][0-9]*\\.[0-9][0-9]*)\\.*";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // Debian
-        } else if (version_release = fopen("/etc/debian_version","r"), version_release){
-            name = strdup("Debian GNU/Linux");
-            id = strdup("debian");
-            static const char *pattern = "([0-9][0-9]*\\.[0-9][0-9]*)\\.*";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        // Slackware
-        } else if (version_release = fopen("/etc/slackware-version","r"), version_release){
-            name = strdup("Slackware");
-            id = strdup("slackware");
-            static const char *pattern = " ([0-9][0-9]*\\.[0-9][0-9]*)\\.*";
-            if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
-                merror_exit("Can not compile regular expression.");
-            }
-            while (fgets(buff, sizeof(buff) - 1, version_release)) {
-                if(regexec(&regexCompiled, buff, 2, match, 0) == 0){
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    version = malloc(match_size +1);
-                    snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    break;
-                }
-            }
-            regfree(&regexCompiled);
-            fclose(version_release);
-        } else if (cmd_output = popen("uname", "r"), cmd_output) {
-            if(fgets(buff,sizeof(buff) - 1, cmd_output) == NULL){
-                mdebug1("Can not read from command output (uname).");
-            } else if (strcmp(strtok(buff, "\n"),"Darwin") == 0){ // Mac OS
-                name = strdup("Darwin");
-                id = strdup("darwin");
-                if (cmd_output_ver = popen("uname -r", "r"), cmd_output_ver) {
-                    if(fgets(buff, sizeof(buff) - 1, cmd_output_ver) == NULL){
-                        mdebug1("Can not read from command output (uname -r).");
-                    } else if (w_regexec("([0-9][0-9]*\\.[0-9][0-9]*)\\.*", buff, 2, match)){
-                        match_size = match[1].rm_eo - match[1].rm_so;
-                        version = malloc(match_size +1);
-                        snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    }
-                    pclose(cmd_output_ver);
-                }
-            } else if (strcmp(strtok(buff, "\n"),"SunOS") == 0){ // Sun OS
-                name = strdup("SunOS");
-                id = strdup("sunos");
-                if (cmd_output_ver = popen("uname -r", "r"), cmd_output_ver) {
-                    if(fgets(buff, sizeof(buff) - 1, cmd_output_ver) == NULL){
-                        mdebug1("Can not read from command output (uname -r).");
-                    } else if (w_regexec("([0-9][0-9]*\\.[0-9][0-9]*)\\.*", buff, 2, match)){
-                        match_size = match[1].rm_eo - match[1].rm_so;
-                        version = malloc(match_size +1);
-                        snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    }
-                    pclose(cmd_output_ver);
-                }
-            } else if (strcmp(strtok(buff, "\n"),"OpenBSD") == 0 ||
-                       strcmp(strtok(buff, "\n"),"NetBSD")  == 0 ||
-                       strcmp(strtok(buff, "\n"),"FreeBSD") == 0 ){ // BSD
-                name = strdup("BSD");
-                id = strdup("bsd");
-                if (cmd_output_ver = popen("uname -r", "r"), cmd_output_ver) {
-                    if(fgets(buff, sizeof(buff) - 1, cmd_output_ver) == NULL){
-                        mdebug1("Can not read from command output (uname -r).");
-                    } else if (w_regexec("([0-9][0-9]*\\.[0-9][0-9]*)\\.*", buff, 2, match)){
-                        match_size = match[1].rm_eo - match[1].rm_so;
-                        version = malloc(match_size +1);
-                        snprintf (version, match_size +1, "%.*s", match_size, buff + match[1].rm_so);
-                    }
-
-                    pclose(cmd_output_ver);
-                }
-            } else if (strcmp(strtok(buff, "\n"),"Linux") == 0){ // Linux undefined
-                name = strdup("Linux");
-                id = strdup("linux");
-            }
-            pclose(cmd_output);
-        }
-    }
-
-    if (!name)
-        name = strdup("\0");
-    if (!version)
-        version = strdup("\0");
-    if (!id)
-        id = strdup("\0");
-
-    if (snprintf (string, 255, "%s|%s: %s", name, id, version) >= 255) {
-        merror("Getting UNIX version: string too large.");
-    }
-
-    free(name);
-    free(version);
-    free(id);
-
-    return string;
-}
 
 /* Get uname. Memory must be freed after use */
 const char *getuname()
 {
     struct utsname uts_buf;
-    const char *os_version;
     static char muname[512] = "";
+    os_info *readed_version;
 
     if (!muname[0]){
-        if (uname(&uts_buf) >= 0) {
-            if (os_version = get_unix_version(), os_version){
-                snprintf(muname, 512, "%s %s %s %s %s [%s] - %s %s",
-                         uts_buf.sysname,
-                         uts_buf.nodename,
-                         uts_buf.release,
-                         uts_buf.version,
-                         uts_buf.machine,
-                         os_version,
-                         __ossec_name, __ossec_version);
-            }
-            else {
-                snprintf(muname, 512, "%s %s %s %s %s - %s %s",
-                         uts_buf.sysname,
-                         uts_buf.nodename,
-                         uts_buf.release,
-                         uts_buf.version,
-                         uts_buf.machine,
-                         __ossec_name, __ossec_version);
-            }
+        if (readed_version = get_unix_version(), readed_version){
+            snprintf(muname, 512, "%s |%s |%s |%s |%s [%s|%s: %s] - %s %s",
+                    readed_version->sysname,
+                    readed_version->nodename,
+                    readed_version->release,
+                    readed_version->version,
+                    readed_version->machine,
+                    readed_version->os_name,
+                    readed_version->os_platform,
+                    readed_version->os_version,
+                    __ossec_name, __ossec_version);
+
+            free_osinfo(readed_version);
+        }
+        else if (uname(&uts_buf) >= 0) {
+            snprintf(muname, 512, "%s %s %s %s %s - %s %s",
+                     uts_buf.sysname,
+                     uts_buf.nodename,
+                     uts_buf.release,
+                     uts_buf.version,
+                     uts_buf.machine,
+                     __ossec_name, __ossec_version);
         } else {
             snprintf(muname, 512, "No system info available -  %s %s",
                      __ossec_name, __ossec_version);
@@ -1010,6 +1031,7 @@ const char *getuname()
 
     return muname;
 }
+
 
 /* Daemonize a process without closing stdin/stdout/stderr */
 void goDaemonLight()
@@ -1100,29 +1122,36 @@ void goDaemon()
 
 int checkVista()
 {
+    /* Check if the system is Vista (must be called during the startup) */
     const char *m_uname;
     isVista = 0;
 
     m_uname = getuname();
-    if (!m_uname) {
-        merror(MEM_ERROR, errno, strerror(errno));
-        return (0);
+
+    OSVERSIONINFOEX osvi;
+    BOOL bOsVersionInfoEx;
+
+    ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
+    osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
+
+    if (!(bOsVersionInfoEx = GetVersionEx ((OSVERSIONINFO *) &osvi))) {
+        osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+        if (!GetVersionEx((OSVERSIONINFO *)&osvi)) {
+            merror("Cannot get Windows version number.");
+            return -1;
+        }
     }
 
-    /* Check if the system is Vista (must be called during the startup) */
-    if (strstr(m_uname, "Windows Server 2008") ||
-            strstr(m_uname, "Vista") ||
-            strstr(m_uname, "Windows 7") ||
-            strstr(m_uname, "Windows 8") ||
-            strstr(m_uname, "Windows Server 2012")) {
+    if (osvi.dwMajorVersion >= 6) {
         isVista = 1;
-        minfo("System is Vista or newer (%s).", m_uname);
-    } else {
-        minfo("System is older than Vista (%s).", m_uname);
+        minfo("Windows version is 6.0 or newer. (%s).", m_uname);
     }
+    else
+        minfo("Windows version is older than 6.0. (%s).", m_uname);
 
     return (isVista);
 }
+
 
 /* Get basename of path */
 char *basename_ex(char *path)
@@ -1241,13 +1270,13 @@ int mkstemp_ex(char *tmp_path)
           );
 
     if (pSD == NULL) {
-        mferror("Could not initalize SECURITY_DESCRIPTOR because of a LocalAlloc() failure which returned (%lu)", GetLastError());
+        mferror("Could not initialize SECURITY_DESCRIPTOR because of a LocalAlloc() failure which returned (%lu)", GetLastError());
 
         goto cleanup;
     }
 
     if (!InitializeSecurityDescriptor(pSD, SECURITY_DESCRIPTOR_REVISION)) {
-        mferror("Could not initalize SECURITY_DESCRIPTOR because of an InitializeSecurityDescriptor() failure which returned (%lu)", GetLastError());
+        mferror("Could not initialize SECURITY_DESCRIPTOR because of an InitializeSecurityDescriptor() failure which returned (%lu)", GetLastError());
 
         goto cleanup;
     }
@@ -1329,10 +1358,6 @@ const char *getuname()
     int ret_size = OS_SIZE_1024 - 2;
     static char ret[OS_SIZE_1024 + 1] = "";
     char os_v[128 + 1];
-    FILE *cmd_output;
-    char *command;
-    size_t buf_tam = 100;
-    char read_buff[buf_tam];
     int add_infoEx = 1;
 
     typedef void (WINAPI * PGNSI)(LPSYSTEM_INFO);
@@ -1512,35 +1537,30 @@ const char *getuname()
 
                 }
                 ret_size -= strlen(ret) + 1;
-
             } else if (osvi.dwMajorVersion == 6 && (osvi.dwMinorVersion == 2 || osvi.dwMinorVersion == 3)) {
-                command = "wmic os get caption";
-                char *end;
-                cmd_output = popen(command, "r");
-                if (!cmd_output) {
-                    merror("Unable to execute command: '%s'.", command);
-                }
-                if (strncmp(fgets(read_buff, buf_tam, cmd_output),"Caption",7) == 0) {
-                    if (!fgets(read_buff, buf_tam, cmd_output)){
-                        merror("Can't get Version.");
-                        strncat(ret, "Microsoft Windows unknown version ", ret_size - 1);
-                    }
-                    else if (end = strpbrk(read_buff,"\r\n"), end) {
-                        *end = '\0';
-                        int i = strlen(read_buff) - 1;
-                        while(read_buff[i] == 32){
-                            read_buff[i] = '\0';
-                            i--;
-                        }
-                        strncat(ret, read_buff, ret_size - 1);
-                    }else
-                        strncat(ret, "Microsoft Windows unknown version ", ret_size - 1);
-                }
-
-                pclose(cmd_output);
+                // Read Windows Version from registry
+                DWORD dwRet;
+                HKEY RegistryKey;
+                const DWORD size = 1024;
+                TCHAR value[size];
+                DWORD dwCount = size;
                 add_infoEx = 0;
-                ret_size -= strlen(ret) + 1;
 
+                if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"), 0, KEY_READ, &RegistryKey) != ERROR_SUCCESS) {
+                    merror("Error opening Windows registry.");
+                }
+
+                dwRet = RegQueryValueEx(RegistryKey, TEXT("ProductName"), NULL, NULL, (LPBYTE)value, &dwCount);
+                if (dwRet != ERROR_SUCCESS) {
+                    merror("Error reading Windows registry. (Error %u)",(unsigned int)dwRet);
+                    strncat(ret, "Microsoft Windows undefined version", ret_size - 1);
+                }
+                else {
+                    RegCloseKey(RegistryKey);
+                    strncat(ret, "Microsoft ", ret_size - 1);
+                    strncat(ret, value, ret_size - 1);
+                }
+                ret_size -= strlen(ret) + 1;
             } else if (osvi.dwMajorVersion == 5 && osvi.dwMinorVersion == 2) {
                 pGNSI = (PGNSI) GetProcAddress(
                             GetModuleHandle("kernel32.dll"),
@@ -1732,29 +1752,67 @@ const char *getuname()
                 ret_size -= strlen(__wp) + 1;
                 RegCloseKey( hKey );
             } else if (osvi.dwMajorVersion == 6 && (osvi.dwMinorVersion == 2 || osvi.dwMinorVersion == 3)) {
+                // Read Windows Version number from registry
                 char __wp[64];
                 memset(__wp, '\0', 64);
-                command = "wmic os get Version";
-                cmd_output = popen(command, "r");
-                if (!cmd_output) {
-                    merror("Unable to execute command: '%s'.", command);
-                    snprintf(__wp, 63, " [Ver: %s]", "desc");
+                DWORD dwRet;
+                HKEY RegistryKey;
+                const DWORD size = 30;
+                TCHAR winver[size];
+                TCHAR wincomp[size];
+                DWORD winMajor = 0;
+                DWORD winMinor = 0;
+                DWORD dwCount = size;
+                unsigned long type=REG_DWORD;
+
+                if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"), 0, KEY_READ, &RegistryKey) != ERROR_SUCCESS) {
+                    merror("Error opening Windows registry.");
                 }
-                if (strncmp(fgets(read_buff, buf_tam, cmd_output),"Version",7) == 0) {
-                    if (!fgets(read_buff, buf_tam, cmd_output)){
-                        merror("Can't get Version.");
-                        snprintf(__wp, 63, " [Ver: %s]", "desc");
+
+                // Windows 10
+                dwRet = RegQueryValueEx(RegistryKey, TEXT("CurrentMajorVersionNumber"), NULL, &type, (LPBYTE)&winMajor, &dwCount);
+                if (dwRet == ERROR_SUCCESS) {
+                    dwCount = size;
+                    dwRet = RegQueryValueEx(RegistryKey, TEXT("CurrentMinorVersionNumber"), NULL, &type, (LPBYTE)&winMinor, &dwCount);
+                    if (dwRet != ERROR_SUCCESS) {
+                        merror("Error reading 'CurrentMinorVersionNumber' from Windows registry. (Error %u)",(unsigned int)dwRet);
                     }
                     else {
-                        snprintf(__wp, 63, " [Ver: %s]", strtok(read_buff," "));
+                        dwCount = size;
+                        dwRet = RegQueryValueEx(RegistryKey, TEXT("CurrentBuildNumber"), NULL, NULL, (LPBYTE)wincomp, &dwCount);
+                        if (dwRet != ERROR_SUCCESS) {
+                            merror("Error reading 'CurrentBuildNumber' from Windows registry. (Error %u)",(unsigned int)dwRet);
+                            snprintf(__wp, 63, " [Ver: %d.%d]", (unsigned int)winMajor, (unsigned int)winMinor);
+                        }
+                        else {
+                            snprintf(__wp, 63, " [Ver: %d.%d.%s]", (unsigned int)winMajor, (unsigned int)winMinor, wincomp);
+                        }
+                    }
+                    RegCloseKey(RegistryKey);
+                }
+                // Windows 6.2 or 6.3
+                else {
+                    dwRet = RegQueryValueEx(RegistryKey, TEXT("CurrentVersion"), NULL, NULL, (LPBYTE)winver, &dwCount);
+                    if (dwRet != ERROR_SUCCESS) {
+                        merror("Error reading 'Current Version' from Windows registry. (Error %u)",(unsigned int)dwRet);
+                        snprintf(__wp, 63, " [Ver: 6.2]");
+                    }
+                    else {
+                        dwCount = size;
+                        dwRet = RegQueryValueEx(RegistryKey, TEXT("CurrentBuildNumber"), NULL, NULL, (LPBYTE)wincomp, &dwCount);
+                        if (dwRet != ERROR_SUCCESS) {
+                            merror("Error reading 'CurrentBuildNumber' from Windows registry. (Error %u)",(unsigned int)dwRet);
+                            snprintf(__wp, 63, " [Ver: 6.2]");
+                        }
+                        else {
+                            snprintf(__wp, 63, " [Ver: %s.%s]", winver,wincomp);
+                        }
+                        RegCloseKey(RegistryKey);
                     }
                 }
 
-                pclose(cmd_output);
-
                 strncat(ret, __wp, ret_size - 1);
-                ret_size -= strlen(__wp) + 1;
-
+                ret_size -= strlen(ret) + 1;
             } else {
                 char __wp[64];
 
@@ -1802,63 +1860,74 @@ const char *getuname()
     strncat(ret, os_v, ret_size - 1);
 
     return (ret);
-
 }
 
 
 #endif /* WIN32 */
 
-// Delete directory recorsively
+// Delete directory recursively
 
 int rmdir_ex(const char *name) {
-    DIR *dir;
-    struct dirent *dirent;
-    char path[PATH_MAX + 1];
-
     if (rmdir(name) == 0) {
         return 0;
     }
 
     switch (errno) {
     case ENOTDIR:   // Not a directory
+
+#ifdef WIN32
+    case EINVAL:    // Not a directory
+#endif
         return unlink(name);
 
     case ENOTEMPTY: // Directory not empty
-
-        // Erase content
-
-        dir = opendir(name);
-
-        if (!dir) {
-            return -1;
-        }
-
-        while (dirent = readdir(dir), dirent) {
-            // Skip "." and ".."
-            if (dirent->d_name[0] == '.' && (dirent->d_name[1] == '\0' || (dirent->d_name[1] == '.' && dirent->d_name[2] == '\0'))) {
-                continue;
-            }
-
-            if (snprintf(path, PATH_MAX + 1, "%s/%s", name, dirent->d_name) > PATH_MAX) {
-                closedir(dir);
-                return -1;
-            }
-
-            if (rmdir_ex(path) < 0) {
-                closedir(dir);
-                return -1;
-            }
-        }
-
-        closedir(dir);
-
-        // Try to erase again
-
-        return rmdir(name);
+        // Erase content and try to erase again
+        return cldir_ex(name) || rmdir(name) ? -1 : 0;
 
     default:
         return -1;
     }
+}
+
+// Delete directory content
+
+int cldir_ex(const char *name) {
+    return cldir_ex_ignore(name, NULL);
+}
+
+// Delete directory content with exception list
+
+int cldir_ex_ignore(const char * name, const char ** ignore) {
+    DIR *dir;
+    struct dirent *dirent;
+    char path[PATH_MAX + 1];
+
+    // Erase content
+
+    dir = opendir(name);
+
+    if (!dir) {
+        return -1;
+    }
+
+    while (dirent = readdir(dir), dirent) {
+        // Skip "." and ".."
+        if ((dirent->d_name[0] == '.' && (dirent->d_name[1] == '\0' || (dirent->d_name[1] == '.' && dirent->d_name[2] == '\0'))) || w_str_in_array(dirent->d_name, ignore)) {
+            continue;
+        }
+
+        if (snprintf(path, PATH_MAX + 1, "%s/%s", name, dirent->d_name) > PATH_MAX) {
+            closedir(dir);
+            return -1;
+        }
+
+        if (rmdir_ex(path) < 0) {
+            closedir(dir);
+            return -1;
+        }
+    }
+
+    return closedir(dir);
 }
 
 int TempFile(File *file, const char *source, int copy) {
@@ -1878,11 +1947,18 @@ int TempFile(File *file, const char *source, int copy) {
     }
 
 #ifndef WIN32
-    if (fchmod(fd, 0640) < 0) {
-        close(fd);
-        unlink(template);
-        return -1;
+    struct stat buf;
+
+    if (stat(source, &buf) == 0) {
+        if (fchmod(fd, buf.st_mode) < 0) {
+            close(fd);
+            unlink(template);
+            return -1;
+        }
+    } else {
+        mdebug1(FSTAT_ERROR, source, errno, strerror(errno));
     }
+
 #endif
 
     file->fp = fdopen(fd, "w");
@@ -1898,34 +1974,29 @@ int TempFile(File *file, const char *source, int copy) {
         size_t count_w;
         char buffer[4096];
 
-        fp_src = fopen(source, "r");
+        if (fp_src = fopen(source, "r"), fp_src) {
+            while (!feof(fp_src)) {
+                count_r = fread(buffer, 1, 4096, fp_src);
 
-        if (!fp_src) {
-            file->name = strdup(template);
-            return 0;
-        }
+                if (ferror(fp_src)) {
+                    fclose(fp_src);
+                    fclose(file->fp);
+                    unlink(template);
+                    return -1;
+                }
 
-        while (!feof(fp_src)) {
-            count_r = fread(buffer, 1, 4096, fp_src);
+                count_w = fwrite(buffer, 1, count_r, file->fp);
 
-            if (ferror(fp_src)) {
-                fclose(fp_src);
-                fclose(file->fp);
-                unlink(template);
-                return -1;
+                if (count_w != count_r || ferror(file->fp)) {
+                    fclose(fp_src);
+                    fclose(file->fp);
+                    unlink(template);
+                    return -1;
+                }
             }
 
-            count_w = fwrite(buffer, 1, count_r, file->fp);
-
-            if (count_w != count_r || ferror(file->fp)) {
-                fclose(fp_src);
-                fclose(file->fp);
-                unlink(template);
-                return -1;
-            }
+            fclose(fp_src);
         }
-
-        fclose(fp_src);
     }
 
     file->name = strdup(template);
@@ -1984,4 +2055,164 @@ int OS_MoveFile(const char *src, const char *dst) {
     fclose(fp_dst);
     unlink(dst);
     return status;
+}
+
+// Make directory recursively
+int mkdir_ex(const char * path) {
+    char sep;
+    char * temp = strdup(path);
+    char * psep;
+    char * next;
+
+#ifndef WIN32
+    for (next = temp; psep = strchr(next, '/'), psep; next = psep + 1) {
+#else
+    for (next = temp; psep = strchr(next, '/'), psep || (psep = strchr(next, '\\'), psep); next = psep + 1) {
+#endif
+
+        sep = *psep;
+        *psep = '\0';
+
+        if (*temp && mkdir(temp, 0770) < 0) {
+            switch (errno) {
+            case EEXIST:
+                if (IsDir(temp) < 0) {
+                    merror("Couldn't make dir '%s': not a directory.", temp);
+                    free(temp);
+                    return -1;
+                }
+
+                break;
+
+            case EISDIR:
+                break;
+
+            default:
+                merror("Couldn't make dir '%s': %s", temp, strerror(errno));
+                free(temp);
+                return -1;
+            }
+        }
+
+        *psep = sep;
+    }
+
+    free(temp);
+
+    if (mkdir(path, 0770) < 0) {
+        switch (errno) {
+        case EEXIST:
+            if (IsDir(path) < 0) {
+                merror("Couldn't make dir '%s': not a directory.", path);
+                return -1;
+            }
+
+            break;
+
+        case EISDIR:
+            break;
+
+        default:
+            merror("Couldn't make dir '%s': %s", path, strerror(errno));
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int w_ref_parent_folder(const char * path) {
+    const char * str;
+    char * ptr;
+
+    switch (path[0]) {
+    case '\0':
+        return 0;
+
+    case '.':
+        switch (path[1]) {
+        case '\0':
+            return 0;
+
+        case '.':
+            switch (path[2]) {
+            case '\0':
+                return 1;
+
+            case '/':
+#ifdef WIN32
+            case '\\':
+#endif
+                return 1;
+            }
+        }
+    }
+
+#ifdef WIN32
+    for (str = path; ptr = strstr(str, "/.."), ptr || (ptr = strstr(str, "\\.."), ptr); str = ptr + 3) {
+        if (ptr[3] == '\0' || ptr[3] == '/' || ptr[3] == '\\') {
+#else
+    for (str = path; ptr = strstr(str, "/.."), ptr; str = ptr + 3) {
+        if (ptr[3] == '\0' || ptr[3] == '/') {
+#endif
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+
+cJSON* getunameJSON()
+{
+    os_info *read_info;
+    cJSON* root=cJSON_CreateObject();
+
+#ifndef WIN32
+    if (read_info = get_unix_version(), read_info) {
+#else
+    if (read_info = get_win_version(), read_info) {
+#endif
+        if (read_info->os_name && (strcmp(read_info->os_name, "unknown") != 0)){
+            cJSON_AddStringToObject(root, "os_name", read_info->os_name);
+        }
+        if (read_info->os_major){
+            cJSON_AddStringToObject(root, "os_major", read_info->os_major);
+        }
+        if (read_info->os_minor){
+            cJSON_AddStringToObject(root, "os_minor", read_info->os_minor);
+        }
+        if (read_info->os_build){
+            cJSON_AddStringToObject(root, "os_build", read_info->os_build);
+        }
+        if (read_info->os_version && (strcmp(read_info->os_version, "unknown") != 0)){
+            cJSON_AddStringToObject(root, "os_version", read_info->os_version);
+        }
+        if (read_info->os_codename){
+            cJSON_AddStringToObject(root, "os_codename", read_info->os_codename);
+        }
+        if (read_info->os_platform){
+            cJSON_AddStringToObject(root, "os_platform", read_info->os_platform);
+        }
+        if (read_info->sysname){
+            cJSON_AddStringToObject(root, "sysname", read_info->sysname);
+        }
+        if (read_info->nodename && (strcmp(read_info->nodename, "unknown") != 0)){
+            cJSON_AddStringToObject(root, "hostname", read_info->nodename);
+        }
+        if (read_info->release){
+            cJSON_AddStringToObject(root, "release", read_info->release);
+        }
+        if (read_info->version){
+            cJSON_AddStringToObject(root, "version", read_info->version);
+        }
+        if (read_info->machine && (strcmp(read_info->machine, "unknown") != 0)){
+            cJSON_AddStringToObject(root, "architecture", read_info->machine);
+        }
+
+        free_osinfo(read_info);
+        return root;
+    }
+    else
+        return NULL;
 }

@@ -1,5 +1,11 @@
 # Wazuh
 
+[![Slack](https://img.shields.io/badge/slack-join-blue.svg)](https://goo.gl/forms/M2AoZC4b2R9A9Zy12)
+[![Email](https://img.shields.io/badge/email-join-blue.svg)](https://groups.google.com/forum/#!forum/wazuh)
+[![Documentation](https://img.shields.io/badge/docs-view-green.svg)](https://documentation.wazuh.com)
+[![Documentation](https://img.shields.io/badge/web-view-green.svg)](https://wazuh.com)
+[![Coverity](https://scan.coverity.com/projects/10992/badge.svg)](https://scan.coverity.com/projects/wazuh-wazuh)
+
 Wazuh helps you to gain deeper security visibility into your infrastructure by monitoring hosts at an operating system and application level. This solution, based on lightweight multi-platform agents, provides the following capabilities:
 
 - **Log management and analysis:** Wazuh agents read operating system and application logs, and securely forward them to a central manager for rule-based analysis and storage.
@@ -19,7 +25,7 @@ Wazuh also includes a rich web application (fully integrated as a Kibana app), f
 
 * [Wazuh App](https://documentation.wazuh.com/current/index.html#example-screenshots) is a rich web application (fully integrated as a Kibana app), for mining log analysis alerts and for monitoring and managing your Wazuh infrastructure.
 
-* [Wazuh Ruleset](https://documentation.wazuh.com/current/user-manual/ruleset/index.html) is our repository to centralice decoders, rules, rootchecks and SCAP content. The ruleset is used by the manager to detect attacks, intrusions, software misuse, configuration problems, application errors, malware, rootkits, system anomalies or security policy violations. Also, it includes the compliance mapping with PCI DSS v3.1 and CIS. Users can contribute to this rule set by submitting pull requests to our [Github repository](https://github.com/wazuh/wazuh-ruleset).
+* [Wazuh Ruleset](https://documentation.wazuh.com/current/user-manual/ruleset/index.html) is our repository to centralize decoders, rules, rootchecks and SCAP content. The ruleset is used by the manager to detect attacks, intrusions, software misuse, configuration problems, application errors, malware, rootkits, system anomalies or security policy violations. Also, it includes the compliance mapping with PCI DSS v3.1 and CIS. Users can contribute to this rule set by submitting pull requests to our [Github repository](https://github.com/wazuh/wazuh-ruleset).
 
 * [Wazuh RESTful API](https://documentation.wazuh.com/current/user-manual/api/index.html) is used to monitor and control your Wazuh installation, providing an interface to interact with the manager from anything that can send an HTTP request.
 
@@ -38,7 +44,6 @@ Wazuh also includes a rich web application (fully integrated as a Kibana app), f
 
 * `stable` branch on correspond to the last Wazuh stable version.
 * `master` branch contains the latest code, be aware of possible bugs on this branch.
-* `development` branch includes all the new features we're adding and testing.
 
 ## Contribute
 
@@ -63,7 +68,7 @@ If you want to contribute to our project please don't hesitate to send a pull re
 ## License and copyright
 
 WAZUH
-Copyright (C) 2017 Wazuh Inc.  (License GPLv2)
+Copyright (C) 2016-2018 Wazuh Inc.  (License GPLv2)
 
 Based on OSSEC
 Copyright (C) 2015 Trend Micro Inc.

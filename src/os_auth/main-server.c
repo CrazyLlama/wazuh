@@ -22,18 +22,6 @@
  *
  */
 
-#ifndef LIBOPENSSL_ENABLED
-
-#include <stdlib.h>
-#include <stdio.h>
-int main()
-{
-    printf("ERROR: Not compiled. Missing OpenSSL support.\n");
-    exit(0);
-}
-
-#else
-
 #include "auth.h"
 #include <pthread.h>
 #include <sys/wait.h>
@@ -61,10 +49,10 @@ static char *authpass = NULL;
 static SSL_CTX *ctx;
 static int remote_sock = -1;
 
+char shost[512];
 authd_config_t config;
 keystore keys;
-
-static struct client pool[POOL_SIZE];
+static struct client pool[AUTH_POOL];
 static volatile int pool_i = 0;
 static volatile int pool_j = 0;
 volatile int write_pending = 0;
@@ -85,7 +73,7 @@ pthread_cond_t cond_pending = PTHREAD_COND_INITIALIZER;
 static void help_authd()
 {
     print_header();
-    print_out("  %s: -[Vhdtfi] [-F <time>] [-g group] [-D dir] [-p port] [-P] [-v path [-s]] [-x path] [-k path]", ARGV0);
+    print_out("  %s: -[Vhdtfi] [-F <time>] [-g group] [-D dir] [-p port] [-P] [-c ciphers] [-v path [-s]] [-x path] [-k path]", ARGV0);
     print_out("    -V          Version and license message.");
     print_out("    -h          This help message.");
     print_out("    -d          Debug mode. Use this parameter multiple times to increase the debug level.");
@@ -99,11 +87,13 @@ static void help_authd()
     print_out("    -D <dir>    Directory to chroot into. Default: %s.", DEFAULTDIR);
     print_out("    -p <port>   Manager port. Default: %d.", DEFAULT_PORT);
     print_out("    -P          Enable shared password authentication, at %s or random.", AUTHDPASS_PATH);
+    print_out("    -c          SSL cipher list (default: %s)", DEFAULT_CIPHERS);
     print_out("    -v <path>   Full path to CA certificate used to verify clients.");
     print_out("    -s          Used with -v, enable source host verification.");
     print_out("    -x <path>   Full path to server certificate. Default: %s%s.", DEFAULTDIR, CERTFILE);
     print_out("    -k <path>   Full path to server key. Default: %s%s.", DEFAULTDIR, KEYFILE);
     print_out("    -a          Auto select SSL/TLS method. Default: TLS v1.2 only.");
+    print_out("    -L          Force insertion though agent limit reached.");
     print_out(" ");
     exit(1);
 }
@@ -127,11 +117,11 @@ char *__generatetmppass()
     rand3 = GetRandomNoise();
     rand4 = GetRandomNoise();
 
-    OS_MD5_Str(rand3, md3);
-    OS_MD5_Str(rand4, md4);
+    OS_MD5_Str(rand3, -1, md3);
+    OS_MD5_Str(rand4, -1, md4);
 
     snprintf(str1, STR_SIZE, "%d%d%s%d%s%s",(int)time(0), rand1, getuname(), rand2, md3, md4);
-    OS_MD5_Str(str1, md1);
+    OS_MD5_Str(str1, -1, md1);
     fstring = strdup(md1);
     free(rand3);
     free(rand4);
@@ -195,12 +185,14 @@ int main(int argc, char **argv)
         int use_ip_address = 0;
         int clear_removed = 0;
         int force_insert = -2;
+        int no_limit = 0;
+        const char *ciphers = NULL;
         const char *ca_cert = NULL;
         const char *server_cert = NULL;
         const char *server_key = NULL;
-        unsigned short port = 0;  // TODO: config.port
+        unsigned short port = 0;
 
-        while (c = getopt(argc, argv, "Vdhtfig:D:p:v:sx:k:PF:ar"), c != -1) {
+        while (c = getopt(argc, argv, "Vdhtfig:D:p:c:v:sx:k:PF:ar:L"), c != -1) {
             switch (c) {
                 case 'V':
                     print_version();
@@ -254,6 +246,13 @@ int main(int argc, char **argv)
                     }
                     break;
 
+                case 'c':
+                    if (!optarg) {
+                        merror_exit("-%c needs an argument", c);
+                    }
+                    ciphers = optarg;
+                    break;
+
                 case 'v':
                     if (!optarg) {
                         merror_exit("-%c needs an argument", c);
@@ -302,6 +301,10 @@ int main(int argc, char **argv)
 
                 case 'a':
                     auto_method = 1;
+                    break;
+
+                case 'L':
+                    no_limit = 1;
                     break;
 
                 default:
@@ -355,6 +358,11 @@ int main(int argc, char **argv)
             config.force_time = force_insert;
         }
 
+        if (ciphers) {
+            free(config.ciphers);
+            config.ciphers = strdup(ciphers);
+        }
+
         if (ca_cert) {
             free(config.agent_ca);
             config.agent_ca = strdup(ca_cert);
@@ -372,6 +380,10 @@ int main(int argc, char **argv)
 
         if (port) {
             config.port = port;
+        }
+
+        if (no_limit) {
+            config.flags.register_limit = 0;
         }
     }
 
@@ -424,11 +436,6 @@ int main(int argc, char **argv)
     /* Start up message */
     minfo(STARTUP_MSG, (int)getpid());
 
-#ifdef LEGACY_SSL
-    config.flags.auto_negotiate = 1;
-    mwarn("TLS v1.2 method-forcing disabled. This program was compiled to use SSL/TLS auto-negotiation.");
-#endif
-
     if (config.flags.use_password) {
 
         /* Checking if there is a custom password file */
@@ -469,7 +476,7 @@ int main(int argc, char **argv)
     fclose(fp);
 
     /* Start SSL */
-    ctx = os_ssl_keys(1, dir, config.manager_cert, config.manager_key, config.agent_ca, config.flags.auto_negotiate);
+    ctx = os_ssl_keys(1, dir, config.ciphers, config.manager_cert, config.manager_key, config.agent_ca, config.flags.auto_negotiate);
     if (!ctx) {
         merror("SSL error. Exiting.");
         exit(1);
@@ -485,6 +492,11 @@ int main(int argc, char **argv)
     /* Before chroot */
     srandom_init();
     getuname();
+
+    if (gethostname(shost, sizeof(shost) - 1) < 0) {
+        strncpy(shost, "localhost", sizeof(shost) - 1);
+        shost[sizeof(shost) - 1] = '\0';
+    }
 
     /* Load ossec uid and gid for creating backups */
     if (OS_LoadUid() < 0) {
@@ -615,7 +627,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
     memset(srcip, '\0', IPSIZE + 1);
 
     OS_PassEmptyKeyfile();
-    OS_ReadKeys(&keys, 0, !config.flags.clear_removed);
+    OS_ReadKeys(&keys, 0, !config.flags.clear_removed, 1);
     mdebug1("Dispatch thread ready");
 
     while (running) {
@@ -657,7 +669,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
         }
 
         buf[0] = '\0';
-        ret = SSL_read(ssl, buf, sizeof(buf));
+        ret = SSL_read(ssl, buf, sizeof(buf) - 1);
 
         if (ssl_error(ssl, ret)) {
             merror("SSL Error (%d)", ret);
@@ -666,8 +678,11 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
             continue;
         }
 
+        buf[ret] = '\0';
         parseok = 0;
         tmpstr = buf;
+
+        mdebug2("Request received: <%s>", buf);
 
         /* Checking for shared password authentication. */
         if(authpass) {
@@ -708,6 +723,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 tmpstr++;
             }
         }
+        tmpstr++;
 
         if (parseok == 0) {
             merror("Invalid request for new agent from: %s", srcip);
@@ -727,17 +743,77 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 continue;
             }
 
+            /* Check for valid centralized group */
+            char centralized_group[256] = {0};
+            char centralized_group_token[2] = "G:";
+
+            if(strncmp(++tmpstr,centralized_group_token,2)==0)
+            {
+
+                char group_path[PATH_MAX] = {0};
+
+                sscanf(tmpstr," G:\'%255[^\']\"",centralized_group);
+
+                if(snprintf(group_path,PATH_MAX,isChroot() ? "/etc/shared/%s" : DEFAULTDIR"/etc/shared/%s",centralized_group) >= PATH_MAX){
+                    merror("Invalid group name: %.255s... , group path is too large.",centralized_group);
+                    snprintf(response, 2048, "ERROR: Invalid group name: %.255s...\n\n, group path is too large", centralized_group);
+                    SSL_write(ssl, response, strlen(response));
+                    snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
+                    SSL_write(ssl, response, strlen(response));
+                    SSL_free(ssl);
+                    close(client.socket);
+                    continue;
+                }
+
+                /* Check if group exists */
+                DIR *group_dir = opendir(group_path);
+                if (!group_dir) {
+                    merror("Invalid group: %.255s",centralized_group);
+                    snprintf(response, 2048, "ERROR: Invalid group: %s\n\n", centralized_group);
+                    SSL_write(ssl, response, strlen(response));
+                    snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
+                    SSL_write(ssl, response, strlen(response));
+                    SSL_free(ssl);
+                    close(client.socket);
+                    continue;
+                }
+                closedir(group_dir);
+
+                /*Forward the string pointer G:'........' 2 for G:, 2 for ''*/
+                tmpstr+= 2+strlen(centralized_group)+2;
+            }else{
+                tmpstr--;
+            }
+
+            /* Check for IP when client uses -i option */
+            int use_client_ip = 0;
+            char client_source_ip[IPSIZE + 1] = {0};
+            char client_source_ip_token[3] = "IP:";
+
+            if(strncmp(++tmpstr,client_source_ip_token,3)==0)
+            {
+                sscanf(tmpstr," IP:\'%15[^\']\"",client_source_ip);
+
+                /* If IP: != 'src' overwrite the srcip */
+                if(strncmp(client_source_ip,"src",3) != 0)
+                {
+                    memcpy(srcip,client_source_ip,IPSIZE);
+                }
+
+                use_client_ip = 1;
+            }
+
             pthread_mutex_lock(&mutex_keys);
 
             /* Check for duplicated IP */
 
-            if (config.flags.use_source_ip) {
+            if (config.flags.use_source_ip || use_client_ip) {
                 if (index = OS_IsAllowedIP(&keys, srcip), index >= 0) {
                     if (config.flags.force_insert && (antiquity = OS_AgentAntiquity(keys.keyentries[index]->name, keys.keyentries[index]->ip->ip), antiquity >= config.force_time || antiquity < 0)) {
                         id_exist = keys.keyentries[index]->id;
                         minfo("Duplicated IP '%s' (%s). Saving backup.", srcip, id_exist);
                         add_backup(keys.keyentries[index]);
-                        OS_DeleteKey(&keys, id_exist);
+                        OS_DeleteKey(&keys, id_exist, 0);
                     } else {
                         pthread_mutex_unlock(&mutex_keys);
                         merror("Duplicated IP %s", srcip);
@@ -752,6 +828,20 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 }
             }
 
+            /* Check whether the agent name is the same as the manager */
+
+            if (!strcmp(agentname, shost)) {
+                pthread_mutex_unlock(&mutex_keys);
+                merror("Invalid agent name %s (same as manager)", agentname);
+                snprintf(response, 2048, "ERROR: Invalid agent name: %s\n\n", agentname);
+                SSL_write(ssl, response, strlen(response));
+                snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
+                SSL_write(ssl, response, strlen(response));
+                SSL_free(ssl);
+                close(client.socket);
+                continue;
+            }
+
             /* Check for duplicated names */
 
             if (index = OS_IsAllowedName(&keys, agentname), index >= 0) {
@@ -759,7 +849,7 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                     id_exist = keys.keyentries[index]->id;
                     minfo("Duplicated name '%s' (%s). Saving backup.", agentname, id_exist);
                     add_backup(keys.keyentries[index]);
-                    OS_DeleteKey(&keys, id_exist);
+                    OS_DeleteKey(&keys, id_exist, 0);
                 } else {
                     strncpy(fname, agentname, 2048);
 
@@ -786,9 +876,23 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 }
             }
 
+            /* Check for agents limit */
+
+            if (config.flags.register_limit && keys.keysize >= (MAX_AGENTS - 2) ) {
+                pthread_mutex_unlock(&mutex_keys);
+                merror(AG_MAX_ERROR, MAX_AGENTS - 2);
+                snprintf(response, 2048, "ERROR: The maximum number of agents has been reached\n\n");
+                SSL_write(ssl, response, strlen(response));
+                snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
+                SSL_write(ssl, response, strlen(response));
+                SSL_free(ssl);
+                close(client.socket);
+                continue;
+            }
+
             /* Add the new agent */
 
-            if (index = OS_AddNewAgent(&keys, NULL, agentname, config.flags.use_source_ip ? srcip : NULL, NULL), index < 0) {
+            if (index = OS_AddNewAgent(&keys, NULL, agentname, (config.flags.use_source_ip || use_client_ip)? srcip : NULL, NULL), index < 0) {
                 pthread_mutex_unlock(&mutex_keys);
                 merror("Unable to add agent: %s (internal error)", agentname);
                 snprintf(response, 2048, "ERROR: Internal manager error adding agent: %s\n\n", agentname);
@@ -800,7 +904,25 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 continue;
             }
 
-            snprintf(response, 2048, "OSSEC K:'%s %s %s %s'\n\n", keys.keyentries[index]->id, agentname, config.flags.use_source_ip ? srcip : "any", keys.keyentries[index]->key);
+            /* Add the agent to the centralized configuration group */
+            if(*centralized_group) {
+                char path[PATH_MAX];
+
+                if (snprintf(path, PATH_MAX, isChroot() ? GROUPS_DIR "/%s" : DEFAULTDIR GROUPS_DIR "/%s", keys.keyentries[index]->id) >= PATH_MAX) {
+                    merror("At set_agent_group(): file path too large for agent '%s'.", keys.keyentries[index]->id);
+                    OS_RemoveAgent(keys.keyentries[index]->id);
+                    merror("Unable to set agent centralized group: %s (internal error)", centralized_group);
+                    snprintf(response, 2048, "ERROR: Internal manager error setting agent centralized group: %s\n\n", centralized_group);
+                    SSL_write(ssl, response, strlen(response));
+                    snprintf(response, 2048, "ERROR: Unable to add agent.\n\n");
+                    SSL_write(ssl, response, strlen(response));
+                    SSL_free(ssl);
+                    close(client.socket);
+                    continue;
+                }
+            }
+
+            snprintf(response, 2048, "OSSEC K:'%s %s %s %s'\n\n", keys.keyentries[index]->id, agentname, (config.flags.use_source_ip || use_client_ip) ? srcip : "any", keys.keyentries[index]->key);
             minfo("Agent key generated for '%s' (requested by %s)", agentname, srcip);
             ret = SSL_write(ssl, response, strlen(response));
 
@@ -808,10 +930,10 @@ void* run_dispatcher(__attribute__((unused)) void *arg) {
                 merror("SSL write error (%d)", ret);
                 merror("Agent key not saved for %s", agentname);
                 ERR_print_errors_fp(stderr);
-                OS_DeleteKey(&keys, keys.keyentries[keys.keysize - 1]->id);
+                OS_DeleteKey(&keys, keys.keyentries[keys.keysize - 1]->id, 1);
             } else {
                 /* Add pending key to write */
-                add_insert(keys.keyentries[keys.keysize - 1]);
+                add_insert(keys.keyentries[keys.keysize - 1], *centralized_group ? centralized_group : NULL);
                 write_pending = 1;
                 pthread_cond_signal(&cond_pending);
             }
@@ -860,7 +982,7 @@ void* run_writer(__attribute__((unused)) void *arg) {
         pthread_mutex_unlock(&mutex_keys);
 
         if (OS_WriteKeys(copy_keys) < 0)
-            merror("Could't write file client.keys");
+            merror("Couldn't write file client.keys");
 
         OS_FreeKeys(copy_keys);
         free(copy_keys);
@@ -869,9 +991,17 @@ void* run_writer(__attribute__((unused)) void *arg) {
         for (cur = copy_insert; cur; cur = next) {
             next = cur->next;
             OS_AddAgentTimestamp(cur->id, cur->name, cur->ip, cur_time);
+
+            if(cur->group){
+                if(set_agent_group(cur->id,cur->group) == -1){
+                    merror("Unable to set agent centralized group: %s (internal error)", cur->group);
+                }
+            }
+
             free(cur->id);
             free(cur->name);
             free(cur->ip);
+            free(cur->group);
             free(cur);
         }
 
@@ -885,12 +1015,16 @@ void* run_writer(__attribute__((unused)) void *arg) {
         }
 
         for (cur = copy_remove; cur; cur = next) {
+            char full_name[FILE_SIZE + 1];
             next = cur->next;
-            delete_agentinfo(cur->id, cur->name);
+            snprintf(full_name, sizeof(full_name), "%s-%s", cur->name, cur->ip);
+            delete_agentinfo(cur->id, full_name);
             OS_RemoveCounter(cur->id);
             OS_RemoveAgentTimestamp(cur->id);
+            OS_RemoveAgentGroup(cur->id);
             free(cur->id);
             free(cur->name);
+            free(cur->ip);
             free(cur);
         }
     }
@@ -899,13 +1033,17 @@ void* run_writer(__attribute__((unused)) void *arg) {
 }
 
 // Append key to insertion queue
-void add_insert(const keyentry *entry) {
+void add_insert(const keyentry *entry,const char *group) {
     struct keynode *node;
 
     os_calloc(1, sizeof(struct keynode), node);
     node->id = strdup(entry->id);
     node->name = strdup(entry->name);
     node->ip = strdup(entry->ip->ip);
+    node->group = NULL;
+
+    if(group != NULL)
+        node->group = strdup(group);
 
     (*insert_tail) = node;
     insert_tail = &node->next;
@@ -931,10 +1069,21 @@ void add_remove(const keyentry *entry) {
     os_calloc(1, sizeof(struct keynode), node);
     node->id = strdup(entry->id);
     node->name = strdup(entry->name);
+    node->ip = strdup(entry->ip->ip);
 
     (*remove_tail) = node;
     remove_tail = &node->next;
 }
+
+/* To avoid hp-ux requirement of strsignal */
+#ifdef __hpux
+char* strsignal(int sig)
+{
+    char str[12];
+    sprintf(str, "%d", sig);
+    return str;
+}
+#endif
 
 /* Signal handler */
 void handler(int signum) {
@@ -963,5 +1112,3 @@ void authd_sigblock() {
     sigaddset(&sigset, SIGINT);
     pthread_sigmask(SIG_BLOCK, &sigset, NULL);
 }
-
-#endif /* LIBOPENSSL_ENABLED */

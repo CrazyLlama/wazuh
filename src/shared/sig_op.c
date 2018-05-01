@@ -16,15 +16,31 @@
 #include <signal.h>
 #include <string.h>
 
+#include "shared.h"
 #include "sig_op.h"
 #include "file_op.h"
 #include "debug_op.h"
 #include "error_messages/error_messages.h"
+#include "error_messages/debug_messages.h"
 
 static const char *pidfile = NULL;
 
+/* To avoid hp-ux requirement of strsignal */
+#ifdef __hpux
+char* strsignal(int sig)
+{
+    char str[12];
+    sprintf(str, "%d", sig);
+    return str;
+}
+#endif
+
 void HandleExit() {
     DeletePID(pidfile);
+
+    if (strcmp(__local_name, "unset")) {
+        DeleteState();
+    }
 }
 
 void HandleSIG(int sig)

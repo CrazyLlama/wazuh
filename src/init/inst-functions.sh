@@ -19,7 +19,6 @@
 HEADER_TEMPLATE="./etc/templates/config/generic/header-comments.template"
 GLOBAL_TEMPLATE="./etc/templates/config/generic/global.template"
 GLOBAL_AR_TEMPLATE="./etc/templates/config/generic/global-ar.template"
-
 RULES_TEMPLATE="./etc/templates/config/generic/rules.template"
 AR_COMMANDS_TEMPLATE="./etc/templates/config/generic/ar-commands.template"
 AR_DEFINITIONS_TEMPLATE="./etc/templates/config/generic/ar-definitions.template"
@@ -31,6 +30,10 @@ REMOTE_SYS_TEMPLATE="./etc/templates/config/generic/remote-syslog.template"
 LOCALFILES_TEMPLATE="./etc/templates/config/generic/localfile-logs/*.template"
 
 AUTH_TEMPLATE="./etc/templates/config/generic/auth.template"
+CLUSTER_TEMPLATE="./etc/templates/config/generic/cluster.template"
+
+CISCAT_TEMPLATE="./etc/templates/config/generic/wodle-ciscat.template"
+VULN_TEMPLATE="./etc/templates/config/generic/wodle-vulnerability-detector.manager.template"
 
 ##########
 # WriteSyscheck()
@@ -104,6 +107,77 @@ WriteOpenSCAP()
     fi
 }
 
+##########
+# Syscollector()
+##########
+WriteSyscollector()
+{
+    # Adding to the config file
+    SYSCOLLECTOR_TEMPLATE=$(GetTemplate "wodle-syscollector.$1.template" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    if [ "$SYSCOLLECTOR_TEMPLATE" = "ERROR_NOT_FOUND" ]; then
+        SYSCOLLECTOR_TEMPLATE=$(GetTemplate "wodle-syscollector.template" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    fi
+    cat ${SYSCOLLECTOR_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+}
+
+##########
+# WriteCISCAT()
+##########
+WriteCISCAT()
+{
+    # Adding to the config file
+    CISCAT_TEMPLATE=$(GetTemplate "wodle-ciscat.$1.template" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    if [ "$CISCAT_TEMPLATE" = "ERROR_NOT_FOUND" ]
+    then
+        CISCAT_TEMPLATE=$(GetTemplate "wodle-ciscat.template" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    fi
+    sed -e "s|\${INSTALLDIR}|$INSTALLDIR|g" "${CISCAT_TEMPLATE}" >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+}
+
+##########
+# InstallOpenSCAPFiles()
+##########
+InstallOpenSCAPFiles()
+{
+    cd ..
+    OPENSCAP_FILES_PATH=$(GetTemplate "openscap.files" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    cd ./src
+    if [ "$OPENSCAP_FILES_PATH" = "ERROR_NOT_FOUND" ]; then
+        echo "SCAP security policies not available for this OS version."
+    else
+        echo "Installing SCAP security policies..."
+        OPENSCAP_FILES=$(cat .$OPENSCAP_FILES_PATH)
+        for file in $OPENSCAP_FILES; do
+            if [ -f "../wodles/oscap/content/$file" ]; then
+                ${INSTALL} -v -m 0640 -o root -g ${OSSEC_GROUP} ../wodles/oscap/content/$file ${PREFIX}/wodles/oscap/content
+            else
+                echo "ERROR: SCAP security policy not found: ./wodles/oscap/content/$file"
+            fi
+        done
+    fi
+}
+
+##########
+# GenerateAuthCert()
+##########
+GenerateAuthCert()
+{
+    # Generation auto-signed certificate if not exists
+    if [ ! -f "${INSTALLDIR}/etc/sslmanager.key" ] && [ ! -f "${INSTALLDIR}/etc/sslmanager.cert" ]; then
+        if [ ! "X${USER_GENERATE_AUTHD_CERT}" = "Xn" ]; then
+            if type openssl >/dev/null 2>&1; then
+                echo "Generating self-signed certificate for ossec-authd..."
+                openssl req -x509 -batch -nodes -days 365 -newkey rsa:2048 -subj "/C=US/ST=California/CN=Wazuh/" -keyout ${INSTALLDIR}/etc/sslmanager.key -out ${INSTALLDIR}/etc/sslmanager.cert
+                chmod 640 ${INSTALLDIR}/etc/sslmanager.key
+                chmod 640 ${INSTALLDIR}/etc/sslmanager.cert
+            else
+                echo "ERROR: OpenSSL not found. Cannot generate certificate for ossec-authd."
+            fi
+        fi
+    fi
+}
 
 ##########
 # WriteLogs()
@@ -155,7 +229,7 @@ WriteLogs()
 }
 
 ##########
-# SetHeaders() 1-agent|manager
+# SetHeaders() 1-agent|manager|local
 ##########
 SetHeaders()
 {
@@ -202,13 +276,15 @@ WriteAgent()
 
     echo "<ossec_config>" >> $NEWCONFIG
     echo "  <client>" >> $NEWCONFIG
-
+    echo "    <server>" >> $NEWCONFIG
     if [ "X${HNAME}" = "X" ]; then
-      echo "    <server-ip>$SERVER_IP</server-ip>" >> $NEWCONFIG
+      echo "      <address>$SERVER_IP</address>" >> $NEWCONFIG
     else
-      echo "    <server-hostname>$HNAME</server-hostname>" >> $NEWCONFIG
+      echo "      <address>$HNAME</address>" >> $NEWCONFIG
     fi
-
+    echo "      <port>1514</port>" >> $NEWCONFIG
+    echo "      <protocol>udp</protocol>" >> $NEWCONFIG
+    echo "    </server>" >> $NEWCONFIG
     if [ "X${USER_AGENT_CONFIG_PROFILE}" != "X" ]; then
          PROFILE=${USER_AGENT_CONFIG_PROFILE}
          echo "    <config-profile>$PROFILE</config-profile>" >> $NEWCONFIG
@@ -223,14 +299,17 @@ WriteAgent()
         fi
       fi
     fi
-    echo "    <protocol>udp</protocol>" >> $NEWCONFIG
+    echo "    <notify_time>60</notify_time>" >> $NEWCONFIG
+    echo "    <time-reconnect>300</time-reconnect>" >> $NEWCONFIG
+    echo "    <auto_restart>yes</auto_restart>" >> $NEWCONFIG
+    echo "    <crypto_method>aes</crypto_method>" >> $NEWCONFIG
     echo "  </client>" >> $NEWCONFIG
     echo "" >> $NEWCONFIG
 
     echo "  <client_buffer>" >> $NEWCONFIG
     echo "    <!-- Agent buffer options -->" >> $NEWCONFIG
-    echo "    <disable>no</disable>" >> $NEWCONFIG
-    echo "    <length>5000</length>" >> $NEWCONFIG
+    echo "    <disabled>no</disabled>" >> $NEWCONFIG
+    echo "    <queue_size>5000</queue_size>" >> $NEWCONFIG
     echo "    <events_per_second>500</events_per_second>" >> $NEWCONFIG
     echo "  </client_buffer>" >> $NEWCONFIG
     echo "" >> $NEWCONFIG
@@ -240,6 +319,9 @@ WriteAgent()
 
     # OpenSCAP
     WriteOpenSCAP "agent"
+
+    # CIS-CAT configuration
+    WriteCISCAT "agent"
 
     # Syscheck
     WriteSyscheck "agent"
@@ -262,17 +344,21 @@ WriteAgent()
 
     echo "  <!-- Active response -->" >> $NEWCONFIG
 
+    echo "  <active-response>" >> $NEWCONFIG
     if [ "X$ACTIVERESPONSE" = "Xyes" ]; then
-        echo "  <active-response>" >> $NEWCONFIG
         echo "    <disabled>no</disabled>" >> $NEWCONFIG
-        echo "  </active-response>" >> $NEWCONFIG
-        echo "" >> $NEWCONFIG
     else
-        echo "  <active-response>" >> $NEWCONFIG
         echo "    <disabled>yes</disabled>" >> $NEWCONFIG
-        echo "  </active-response>" >> $NEWCONFIG
-        echo "" >> $NEWCONFIG
     fi
+    echo "    <ca_store>${INSTALLDIR}/etc/wpk_root.pem</ca_store>" >> $NEWCONFIG
+
+    if [ -n "$CA_STORE" ]
+    then
+        echo "    <ca_store>${CA_STORE}</ca_store>" >> $NEWCONFIG
+    fi
+
+    echo "  </active-response>" >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
 
     # Logging format
     cat ${LOGGING_TEMPLATE} >> $NEWCONFIG
@@ -331,6 +417,123 @@ WriteManager()
     # Write OpenSCAP
     WriteOpenSCAP "manager"
 
+    # CIS-CAT configuration
+    WriteCISCAT "manager"
+
+    # Vulnerability Detector
+    cat ${VULN_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Write syscheck
+    WriteSyscheck "manager"
+
+    # Active response
+    if [ "$SET_WHITE_LIST"="true" ]; then
+       sed -e "/  <\/global>/d" "${GLOBAL_AR_TEMPLATE}" >> $NEWCONFIG
+      # Nameservers in /etc/resolv.conf
+      for ip in ${NAMESERVERS} ${NAMESERVERS2};
+        do
+          if [ ! "X${ip}" = "X" -a ! "${ip}" = "0.0.0.0" ]; then
+              echo "    <white_list>${ip}</white_list>" >>$NEWCONFIG
+          fi
+      done
+      # Read string
+      for ip in ${IPS};
+        do
+          if [ ! "X${ip}" = "X" -a ! "${ip}" = "0.0.0.0" ]; then
+            echo $ip | grep -E "^[0-9./]{5,20}$" > /dev/null 2>&1
+            if [ $? = 0 ]; then
+              echo "    <white_list>${ip}</white_list>" >>$NEWCONFIG
+            fi
+          fi
+        done
+        echo "  </global>" >> $NEWCONFIG
+        echo "" >> $NEWCONFIG
+    else
+      cat ${GLOBAL_AR_TEMPLATE} >> $NEWCONFIG
+      echo "" >> $NEWCONFIG
+    fi
+
+    cat ${AR_COMMANDS_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+    cat ${AR_DEFINITIONS_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Write the log files
+    if [ "X${NO_LOCALFILES}" = "X" ]; then
+      echo "  <!-- Log analysis -->" >> $NEWCONFIG
+      WriteLogs "add"
+    else
+      echo "  <!-- Log analysis -->" >> $NEWCONFIG
+    fi
+
+    # Localfile commands
+    LOCALFILE_COMMANDS_TEMPLATE=$(GetTemplate "localfile-commands.manager.template" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    if [ "$LOCALFILE_COMMANDS_TEMPLATE" = "ERROR_NOT_FOUND" ]; then
+      LOCALFILE_COMMANDS_TEMPLATE=$(GetTemplate "localfile-commands.template" ${DIST_NAME} ${DIST_VER} ${DIST_SUBVER})
+    fi
+    cat ${LOCALFILE_COMMANDS_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Writting rules configuration
+    cat ${RULES_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Writting auth configuration
+    sed -e "s|\${INSTALLDIR}|$INSTALLDIR|g" "${AUTH_TEMPLATE}" >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Writting cluster configuration
+    cat ${CLUSTER_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    echo "</ossec_config>" >> $NEWCONFIG
+}
+
+##########
+# WriteLocal() $1="no_locafiles" or empty
+##########
+WriteLocal()
+{
+    NO_LOCALFILES=$1
+
+    HEADERS=$(SetHeaders "Local")
+    echo "$HEADERS" > $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    echo "<ossec_config>" >> $NEWCONFIG
+
+    if [ "$EMAILNOTIFY" = "yes"   ]; then
+        sed -e "s|<email_notification>no</email_notification>|<email_notification>yes</email_notification>|g; \
+        s|<smtp_server>smtp.example.wazuh.com</smtp_server>|<smtp_server>${SMTP}</smtp_server>|g; \
+        s|<email_from>ossecm@example.wazuh.com</email_from>|<email_from>ossecm@${HOST}</email_from>|g; \
+        s|<email_to>recipient@example.wazuh.com</email_to>|<email_to>${EMAIL}</email_to>|g;" "${GLOBAL_TEMPLATE}" >> $NEWCONFIG
+    else
+        cat ${GLOBAL_TEMPLATE} >> $NEWCONFIG
+    fi
+    echo "" >> $NEWCONFIG
+
+    # Alerts level
+    cat ${ALERTS_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Logging format
+    cat ${LOGGING_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
+    # Write rootcheck
+    WriteRootcheck "manager"
+
+    # Write OpenSCAP
+    WriteOpenSCAP "manager"
+
+    # CIS-CAT configuration
+    WriteCISCAT "agent"
+
+    # Vulnerability Detector
+    cat ${VULN_TEMPLATE} >> $NEWCONFIG
+    echo "" >> $NEWCONFIG
+
     # Write syscheck
     WriteSyscheck "manager"
 
@@ -344,7 +547,7 @@ WriteManager()
               echo "    <white_list>${ip}</white_list>" >>$NEWCONFIG
           fi
       done
-      # Readed string
+      # Read string
       for ip in ${IPS};
         do
           if [ ! "X${ip}" = "X" ]; then
@@ -386,9 +589,324 @@ WriteManager()
     cat ${RULES_TEMPLATE} >> $NEWCONFIG
     echo "" >> $NEWCONFIG
 
-    # Writting auth configuration
-    cat ${AUTH_TEMPLATE} >> $NEWCONFIG
-    echo "" >> $NEWCONFIG
-
     echo "</ossec_config>" >> $NEWCONFIG
+}
+
+InstallCommon(){
+
+    PREFIX='/var/ossec'
+    OSSEC_GROUP='ossec'
+    OSSEC_USER='ossec'
+    OSSEC_USER_MAIL='ossecm'
+    OSSEC_USER_REM='ossecr'
+    EXTERNAL_BERKELEY='external/libdb/build_unix/'
+    EXTERNAL_LIBYAML='external/libyaml/'
+    EXTERNAL_CURL='external/curl/'
+    EXTERNAL_JSON="external/cJSON/"
+    EXTERNAL_SQLITE="external/sqlite/"
+    EXTERNAL_SSL="external/openssl/"
+    EXTERNAL_PROCPS="external/procps/"
+    EXTERNAL_ZLIB="external/zlib/"
+    INSTALL="install"
+
+    if [ ${INSTYPE} = 'server' ]; then
+        OSSEC_CONTROL_SRC='./init/ossec-server.sh'
+        OSSEC_CONF_SRC='../etc/ossec-server.conf'
+    elif [ ${INSTYPE} = 'agent' ]; then
+        OSSEC_CONTROL_SRC='./init/ossec-client.sh'
+        OSSEC_CONF_SRC='../etc/ossec-agent.conf'
+    elif [ ${INSTYPE} = 'local' ]; then
+        OSSEC_CONTROL_SRC='./init/ossec-local.sh'
+        OSSEC_CONF_SRC='../etc/ossec-local.conf'
+    fi
+
+    if [ ! ${PREFIX} = ${INSTALLDIR} ]; then
+        PREFIX=${INSTALLDIR}
+    fi
+
+    if [ ${DIST_NAME} = "sunos" ]; then
+        INSTALL="ginstall"
+    elif [ ${DIST_NAME} = "HP-UX" ]; then
+        INSTALL="/usr/local/coreutils/bin/install"
+   elif [ ${DIST_NAME} = "AIX" ]; then
+        INSTALL="/opt/freeware/bin/install"
+    fi
+
+    ./init/adduser.sh ${OSSEC_USER} ${OSSEC_USER_MAIL} ${OSSEC_USER_REM} ${OSSEC_GROUP} ${PREFIX} ${INSTYPE}
+
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/
+  ${INSTALL} -d -m 0770 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/logs
+  ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/logs/ossec
+  ${INSTALL} -m 0660 -o ${OSSEC_USER} -g ${OSSEC_GROUP} /dev/null ${PREFIX}/logs/ossec.log
+  ${INSTALL} -m 0660 -o ${OSSEC_USER} -g ${OSSEC_GROUP} /dev/null ${PREFIX}/logs/ossec.json
+  ${INSTALL} -m 0660 -o ${OSSEC_USER} -g ${OSSEC_GROUP} /dev/null ${PREFIX}/logs/active-responses.log
+
+    if [ ${INSTYPE} = 'agent' ]; then
+        ${INSTALL} -d -m 0750 -o root -g 0 ${PREFIX}/bin
+    else
+        ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/bin
+    fi
+
+  ${INSTALL} -d -m 0750 -o root -g 0 ${PREFIX}/lib
+
+    if [ ${NUNAME} = 'Darwin' ]
+    then
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_JSON}libcjson.dylib ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_SSL}libssl.1.1.dylib ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_SSL}libcrypto.1.1.dylib ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_ZLIB}libz.1.dylib ${PREFIX}/lib
+    else
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_JSON}libcjson.so ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_SSL}libssl.so.1.1 ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_SSL}libcrypto.so.1.1 ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_ZLIB}libz.so.1 ${PREFIX}/lib
+
+        if [ ${NUNAME} = 'Linux' ]
+        then
+            ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_BERKELEY}.libs/libdb-6.2.so ${PREFIX}/lib
+            ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_PROCPS}libproc.so ${PREFIX}/lib
+        fi
+    fi
+
+  ${INSTALL} -m 0750 -o root -g 0 ossec-logcollector ${PREFIX}/bin
+  ${INSTALL} -m 0750 -o root -g 0 ossec-syscheckd ${PREFIX}/bin
+  ${INSTALL} -m 0750 -o root -g 0 ossec-execd ${PREFIX}/bin
+  ${INSTALL} -m 0750 -o root -g 0 manage_agents ${PREFIX}/bin
+  ${INSTALL} -m 0750 -o root -g 0 ../contrib/util.sh ${PREFIX}/bin/
+  ${INSTALL} -m 0750 -o root -g 0 ${OSSEC_CONTROL_SRC} ${PREFIX}/bin/ossec-control
+  ${INSTALL} -m 0750 -o root -g 0 wazuh-modulesd ${PREFIX}/bin/
+
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/queue
+  ${INSTALL} -d -m 0770 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/alerts
+  ${INSTALL} -d -m 0770 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/ossec
+  ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/syscheck
+  ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/diff
+  ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/agents
+
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/wodles
+  ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/wodles
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/wodles/oscap
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/wodles/oscap/content
+
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../wodles/oscap/oscap.py ${PREFIX}/wodles/oscap
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../wodles/oscap/template_*.xsl ${PREFIX}/wodles/oscap
+
+  ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/logs/vuls
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/wodles/vuls
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/wodles/vuls/go
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../wodles/vuls/vuls.py ${PREFIX}/wodles/vuls
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../wodles/vuls/deploy_vuls.sh ${PREFIX}/wodles/vuls
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/wodles/aws
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../wodles/aws/aws.py ${PREFIX}/wodles/aws
+
+  InstallOpenSCAPFiles
+
+  ${INSTALL} -d -m 0770 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/etc
+
+    if [ -f /etc/localtime ]
+    then
+         ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} /etc/localtime ${PREFIX}/etc
+    fi
+
+  ${INSTALL} -d -m 1750 -o root -g ${OSSEC_GROUP} ${PREFIX}/tmp
+
+    if [ -f /etc/TIMEZONE ]; then
+         ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} /etc/TIMEZONE ${PREFIX}/etc/
+    fi
+    # Solaris Needs some extra files
+    if [ ${DIST_NAME} = "SunOS" ]; then
+      ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/usr/share/lib/zoneinfo/
+        cp -rf /usr/share/lib/zoneinfo/* ${PREFIX}/usr/share/lib/zoneinfo/
+        chown root:${OSSEC_GROUP} ${PREFIX}/usr/share/lib/zoneinfo/*
+        find ${PREFIX}/usr/share/lib/zoneinfo/ -type d -exec chmod 0750 {} +
+        find ${PREFIX}/usr/share/lib/zoneinfo/ -type f -exec chmod 0640 {} +
+    fi
+
+    ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/internal_options.conf ${PREFIX}/etc/
+
+    if [ ! -f ${PREFIX}/etc/local_internal_options.conf ]; then
+        ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} ../etc/local_internal_options.conf ${PREFIX}/etc/local_internal_options.conf
+    fi
+
+    if [ ! -f ${PREFIX}/etc/client.keys ]; then
+        ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} /dev/null ${PREFIX}/etc/client.keys
+    fi
+
+    if [ ! -f ${PREFIX}/etc/ossec.conf ]; then
+        if [ -f  ../etc/ossec.mc ]; then
+            ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} ../etc/ossec.mc ${PREFIX}/etc/ossec.conf
+        else
+            ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} ${OSSEC_CONF_SRC} ${PREFIX}/etc/ossec.conf
+        fi
+    fi
+
+  ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/shared
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/active-response
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/active-response/bin
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/agentless
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} agentlessd/scripts/* ${PREFIX}/agentless/
+
+  ${INSTALL} -d -m 0700 -o root -g ${OSSEC_GROUP} ${PREFIX}/.ssh
+
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../active-response/*.sh ${PREFIX}/active-response/bin/
+  ${INSTALL} -m 0750 -o root -g ${OSSEC_GROUP} ../active-response/firewalls/*.sh ${PREFIX}/active-response/bin/
+
+  ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/var
+  ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/run
+  ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/upgrade
+
+      ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/backup
+
+  ./init/fw-check.sh execute
+}
+
+InstallLocal(){
+
+    InstallCommon
+
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/decoders
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/rules
+    ${INSTALL} -d -m 770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/db
+    ${INSTALL} -d -m 770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/db/agents
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/download
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/logs/archives
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/logs/alerts
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/logs/firewall
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/rootcheck
+
+    ${INSTALL} -m 0750 -o root -g 0 ossec-agentlessd ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-analysisd ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-monitord ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-reportd ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-maild ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-logtest ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-csyslogd ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-dbd ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-makelists ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 verify-agent-conf ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 clear_stats ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 list_agents ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 ossec-regex ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 syscheck_update ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 agent_control ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 syscheck_control ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 rootcheck_control ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 ossec-integratord ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 wazuh-db ${PREFIX}/bin/
+    ${INSTALL} -m 0750 -o root -g 0 -b update/ruleset/update_ruleset ${PREFIX}/bin/update_ruleset
+
+    if [ ${NUNAME} = 'Darwin' ]
+    then
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_SQLITE}libsqlite3.dylib ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_LIBYAML}src/.libs/libyaml-0.2.dylib ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_CURL}lib/.libs/libcurl.4.dylib ${PREFIX}/lib
+    else
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_SQLITE}libsqlite3.so ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_LIBYAML}src/.libs/libyaml-0.so.2 ${PREFIX}/lib
+        ${INSTALL} -m 0750 -o root -g 0 ${EXTERNAL_CURL}lib/.libs/libcurl.so.4 ${PREFIX}/lib
+    fi
+
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/stats
+    ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/ruleset
+    ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/ruleset/decoders
+    ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/ruleset/rules
+
+    ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b update/ruleset/RULESET_VERSION ${PREFIX}/ruleset/VERSION
+    ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/rules/*.xml ${PREFIX}/ruleset/rules
+    ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/decoders/*.xml ${PREFIX}/ruleset/decoders
+    ${INSTALL} -m 0660 -o root -g ${OSSEC_GROUP} rootcheck/db/*.txt ${PREFIX}/etc/rootcheck
+
+    ${MAKEBIN} --quiet -C ../framework install PREFIX=${PREFIX}
+
+    if [ ! -f ${PREFIX}/etc/decoders/local_decoder.xml ]; then
+        ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/local_decoder.xml ${PREFIX}/etc/decoders/local_decoder.xml
+    fi
+    if [ ! -f ${PREFIX}/etc/rules/local_rules.xml ]; then
+        ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/local_rules.xml ${PREFIX}/etc/rules/local_rules.xml
+    fi
+    if [ ! -f ${PREFIX}/etc/lists ]; then
+        ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/lists
+    fi
+    if [ ! -f ${PREFIX}/etc/lists/amazon ]; then
+        ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/lists/amazon
+        ${INSTALL} -m 0660 -o root -g ${OSSEC_GROUP} -b ../etc/lists/amazon/* ${PREFIX}/etc/lists/amazon/
+    fi
+    if [ ! -f ${PREFIX}/etc/lists/audit-keys ]; then
+        ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/lists/audit-keys ${PREFIX}/etc/lists/audit-keys
+        ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} -b ../etc/lists/audit-keys.cdb ${PREFIX}/etc/lists/audit-keys.cdb
+    fi
+
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/fts
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/rootcheck
+    ${INSTALL} -d -m 0770 -o ${OSSEC_USER_REM} -g ${OSSEC_GROUP} ${PREFIX}/queue/agent-info
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/agentless
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/db
+
+    ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/integrations
+    ${INSTALL} -m 750 -o root -g ${OSSEC_GROUP} ../integrations/* ${PREFIX}/integrations
+    touch ${PREFIX}/logs/integrations.log
+    chmod 640 ${PREFIX}/logs/integrations.log
+    chown ${OSSEC_USER_MAIL}:${OSSEC_GROUP} ${PREFIX}/logs/integrations.log
+}
+
+TransferShared() {
+    rm -f ${PREFIX}/etc/shared/merged.mg
+    find ${PREFIX}/etc/shared -maxdepth 1 -type f -not -name ar.conf -not -name files.yml -exec cp -pf {} ${PREFIX}/backup/shared \;
+    find ${PREFIX}/etc/shared -maxdepth 1 -type f -not -name ar.conf -not -name files.yml -exec mv -f {} ${PREFIX}/etc/shared/default \;
+}
+
+InstallServer(){
+
+    InstallLocal
+
+    ${INSTALL} -m 0660 -o ${OSSEC_USER} -g ${OSSEC_GROUP} /dev/null ${PREFIX}/logs/cluster.log
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/etc/shared/default
+    ${INSTALL} -d -m 0750 -o root -g ${OSSEC_GROUP} ${PREFIX}/backup/shared
+
+    TransferShared
+
+    ${INSTALL} -m 0750 -o root -g 0 ossec-remoted ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 ossec-authd ${PREFIX}/bin
+
+    ${INSTALL} -d -m 0770 -o ${OSSEC_USER_REM} -g ${OSSEC_GROUP} ${PREFIX}/queue/rids
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/queue/agent-groups
+
+    if [ ! -f ${PREFIX}/queue/agents-timestamp ]; then
+        ${INSTALL} -m 0600 -o root -g ${OSSEC_GROUP} /dev/null ${PREFIX}/queue/agents-timestamp
+    fi
+
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/backup/agents
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/backup/groups
+
+    ${INSTALL} -m 0660 -o root -g ${OSSEC_GROUP} rootcheck/db/*.txt ${PREFIX}/etc/shared/default
+
+    if [ ! -f ${PREFIX}/etc/shared/default/agent.conf ]; then
+        ${INSTALL} -m 0660 -o root -g ${OSSEC_GROUP} ../etc/agent.conf ${PREFIX}/etc/shared/default
+    fi
+
+    GenerateAuthCert
+}
+
+InstallAgent(){
+
+    InstallCommon
+
+    ${INSTALL} -m 0750 -o root -g 0 ossec-agentd ${PREFIX}/bin
+    ${INSTALL} -m 0750 -o root -g 0 agent-auth ${PREFIX}/bin
+
+    ${INSTALL} -d -m 0750 -o ${OSSEC_USER} -g ${OSSEC_GROUP} ${PREFIX}/queue/rids
+    ${INSTALL} -d -m 0770 -o root -g ${OSSEC_GROUP} ${PREFIX}/var/incoming
+    ${INSTALL} -m 0660 -o root -g ${OSSEC_GROUP} rootcheck/db/*.txt ${PREFIX}/etc/shared/
+    ${INSTALL} -m 0640 -o root -g ${OSSEC_GROUP} ../etc/wpk_root.pem ${PREFIX}/etc/
+
+}
+
+InstallWazuh(){
+    if [ "X$INSTYPE" = "Xagent" ]; then
+        InstallAgent
+    elif [ "X$INSTYPE" = "Xserver" ]; then
+        InstallServer
+    elif [ "X$INSTYPE" = "Xlocal" ]; then
+        InstallLocal
+    fi
 }

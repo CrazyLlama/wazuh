@@ -13,11 +13,31 @@
 #include "sec.h"
 #include "wazuh_db/wdb.h"
 #include "addagent/manage_agents.h" // FILE_SIZE
+#include "external/cJSON/cJSON.h"
+
 #ifndef WIN32
 
 #ifdef INOTIFY_ENABLED
 #include <sys/inotify.h>
+
 #define IN_BUFFER_SIZE sizeof(struct inotify_event) + NAME_MAX + 1
+
+static volatile unsigned int queue_i;
+static volatile unsigned int queue_j;
+static w_queue_t * queue;                 // Queue for pending files
+static OSHash * ptable;                 // Table for pending paths
+static pthread_mutex_t mutex_queue = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond_pending = PTHREAD_COND_INITIALIZER;
+
+int inotify_fd;
+
+#ifndef LOCAL
+int wd_agents = -2;
+int wd_agentinfo = -2;
+int wd_groups = -2;
+#endif // !LOCAL
+int wd_syscheck = -2;
+int wd_rootcheck = -2;
 
 /* Get current inotify queued events limit */
 static int get_max_queued_events();
@@ -25,9 +45,19 @@ static int get_max_queued_events();
 /* Set current inotify queued events limit */
 static int set_max_queued_events(int size);
 
-#else
-static void wm_check_agents();
-#endif
+// Setup inotify reader
+static void wm_inotify_setup(wm_database * data);
+
+// Real time inotify reader thread
+static void * wm_inotify_start(void * args);
+
+// Insert request into internal structure
+void wm_inotify_push(const char * dirname, const char * fname);
+
+// Extract enqueued path from internal structure
+char * wm_inotify_pop();
+
+#endif // INOTIFY_ENABLED
 
 wm_database *module;
 
@@ -37,9 +67,23 @@ static void* wm_database_main(wm_database *data);
 static void* wm_database_destroy(wm_database *data);
 // Update manager information
 static void wm_sync_manager();
-// Synchronize agents
+
+static char * wm_get_os_arch(char * os_header);
+
+#ifndef LOCAL
+
+static void wm_check_agents();
+
+// Synchronize agents and groups
 static void wm_sync_agents();
+
+// Clean dangling database files
+static void wm_clean_dangling_db();
+
+#endif // LOCAL
+
 static int wm_sync_agentinfo(int id_agent, const char *path);
+static int wm_sync_agent_group(int id_agent, const char *fname);
 static void wm_scan_directory(const char *dirname);
 static int wm_sync_file(const char *dirname, const char *path);
 // Fill syscheck database from an offset. Returns offset at last successful read event, or -1 on error.
@@ -67,164 +111,92 @@ void* wm_database_main(wm_database *data) {
 
     // Manager name synchronization
 
-    if (data->sync_agents)
+    if (data->sync_agents) {
         wm_sync_manager();
+    }
+
+#ifndef LOCAL
+    wm_clean_dangling_db();
+#endif
 
 #ifdef INOTIFY_ENABLED
-    char buffer[IN_BUFFER_SIZE];
-    char keysfile_dir[] = KEYSFILE_PATH;
-    char *keysfile;
-    struct inotify_event *event = (struct inotify_event *)buffer;
-    int fd;
-    int wd_agents = -1;
-    int wd_agentinfo = -1;
-    int wd_syscheck = -1;
-    int wd_rootcheck = -1;
-    int old_max_queued_events = -1;
-    ssize_t count;
-    ssize_t i;
+    if (data->real_time) {
+        char * path;
+        char * file;
 
-    // Set inotify queued events limit
+        wm_inotify_setup(data);
 
-    if (data->max_queued_events) {
-        old_max_queued_events = get_max_queued_events();
+        while (1) {
+            path = wm_inotify_pop();
 
-        if (old_max_queued_events >= 0 && old_max_queued_events != data->max_queued_events) {
-            mtdebug1(WM_DATABASE_LOGTAG, "Setting inotify queued events limit to '%d'", data->max_queued_events);
-
-             if (set_max_queued_events(data->max_queued_events) < 0) {
-                 // Error: do not reset then
-                 old_max_queued_events = -1;
-             }
-        }
-    }
-
-    // Start inotify
-
-    if ((fd = inotify_init()) < 0) {
-        mterror(WM_DATABASE_LOGTAG, "Couldn't init inotify: %s.", strerror(errno));
-        return NULL;
-    }
-
-    // Reset inotify queued events limit
-
-    if (old_max_queued_events >= 0 && old_max_queued_events != data->max_queued_events) {
-        mtdebug2(WM_DATABASE_LOGTAG, "Restoring inotify queued events limit to '%d'", old_max_queued_events);
-        set_max_queued_events(old_max_queued_events);
-    }
-
-    if (!(keysfile = strrchr(keysfile_dir, '/'))) {
-        mterror(WM_DATABASE_LOGTAG, "Couldn't decode keys file path '%s'.", keysfile_dir);
-        return NULL;
-    }
-
-    *(keysfile++) = '\0';
-
-    // First synchronization and add watch for client.keys, Agent info, Syscheck and Rootcheck directories
-
-    if (data->sync_agents) {
-        if ((wd_agents = inotify_add_watch(fd, keysfile_dir, IN_CLOSE_WRITE | IN_MOVED_TO)) < 0)
-            mterror(WM_DATABASE_LOGTAG, "Couldn't watch client.keys file: %s.", strerror(errno));
-
-        mtdebug2(WM_DATABASE_LOGTAG, "wd_agents='%d'", wd_agents);
-
-        if ((wd_agentinfo = inotify_add_watch(fd, DEFAULTDIR AGENTINFO_DIR, IN_CLOSE_WRITE | IN_ATTRIB)) < 0)
-            mterror(WM_DATABASE_LOGTAG, "Couldn't watch the agent info directory: %s.", strerror(errno));
-
-        mtdebug2(WM_DATABASE_LOGTAG, "wd_agentinfo='%d'", wd_agentinfo);
-        wm_sync_agents();
-        wm_scan_directory(DEFAULTDIR AGENTINFO_DIR);
-    }
-
-    if (data->sync_syscheck) {
-        if ((wd_syscheck = inotify_add_watch(fd, DEFAULTDIR SYSCHECK_DIR, IN_MODIFY)) < 0)
-            mterror(WM_DATABASE_LOGTAG, "Couldn't watch Syscheck directory: %s.", strerror(errno));
-
-        mtdebug2(WM_DATABASE_LOGTAG, "wd_syscheck='%d'", wd_syscheck);
-        wm_scan_directory(DEFAULTDIR SYSCHECK_DIR);
-    }
-
-    if (data->sync_rootcheck) {
-        if ((wd_rootcheck = inotify_add_watch(fd, DEFAULTDIR ROOTCHECK_DIR, IN_MODIFY)) < 0)
-            mterror(WM_DATABASE_LOGTAG, "Couldn't watch Rootcheck directory: %s.", strerror(errno));
-
-        mtdebug2(WM_DATABASE_LOGTAG, "wd_rootcheck='%d'", wd_rootcheck);
-        wm_scan_directory(DEFAULTDIR ROOTCHECK_DIR);
-    }
-
-    // Loop
-
-    while (1) {
-
-        // Wait for changes
-
-        mtdebug1(WM_DATABASE_LOGTAG, "Waiting for event notification...");
-
-        do {
-            if ((count = read(fd, buffer, IN_BUFFER_SIZE)) < 0) {
-                if (errno != EAGAIN)
-                    mterror(WM_DATABASE_LOGTAG, "read(): %s.", strerror(errno));
-
-                break;
+#ifndef LOCAL
+            if (!strcmp(path, KEYSFILE_PATH)) {
+                wm_sync_agents();
+            } else
+#endif // !LOCAL
+            {
+                if (file = strrchr(path, '/'), file) {
+                    *(file++) = '\0';
+                    wm_sync_file(path, file);
+                } else {
+                    mterror(WM_DATABASE_LOGTAG, "Couldn't extract file name from '%s'", path);
+                }
             }
 
-            buffer[count - 1] = '\0';
-
-            for (i = 0; i < count; i += (ssize_t)(sizeof(struct inotify_event) + event->len)) {
-                event = (struct inotify_event*)&buffer[i];
-                mtdebug2(WM_DATABASE_LOGTAG, "inotify: i='%zd', name='%s', mask='%u', wd='%d'", i, event->name, event->mask, event->wd);
-
-                if (event->len > IN_BUFFER_SIZE) {
-                    mterror(WM_DATABASE_LOGTAG, "Inotify event too large (%u)", event->len);
-                    break;
-                }
-
-                if (event->wd == wd_agents) {
-                    if (!strcmp(event->name, keysfile))
-                        wm_sync_agents();
-                }
-                else if (event->wd == wd_agentinfo)
-                    wm_sync_file(DEFAULTDIR AGENTINFO_DIR, event->name);
-                else if (event->wd == wd_syscheck)
-                    wm_sync_file(DEFAULTDIR SYSCHECK_DIR, event->name);
-                else if (event->wd == wd_rootcheck)
-                    wm_sync_file(DEFAULTDIR ROOTCHECK_DIR, event->name);
-                else if (event->wd == -1 && event->mask == IN_Q_OVERFLOW) {
-                    mterror(WM_DATABASE_LOGTAG, "Inotify event queue overflowed.");
-                    continue;
-                } else
-                    mterror(WM_DATABASE_LOGTAG, "Unknown watch descriptor '%d', mask='%u'.", event->wd, event->mask);
-            }
-        } while (count > 0);
-    }
-
-#else
-
-    // Systems that don't support inotify
-
-    while (1) {
-        if (data->sync_agents) {
-            wm_check_agents();
-            wm_scan_directory(DEFAULTDIR AGENTINFO_DIR);
+            free(path);
         }
+    } else {
+#endif // INOTIFY_ENABLED
 
-        if (data->sync_syscheck)
-            wm_scan_directory(DEFAULTDIR SYSCHECK_DIR);
+        // Systems that don't support inotify, or real-time disabled
 
-        if (data->sync_rootcheck)
-            wm_scan_directory(DEFAULTDIR ROOTCHECK_DIR);
+        time_t tsleep;
+        time_t tstart;
+        clock_t cstart;
+        struct timespec spec0;
+        struct timespec spec1;
 
-        sleep(data->sleep);
-    }
+        while (1) {
+            tstart = time(NULL);
+            cstart = clock();
+            gettime(&spec0);
 
+#ifndef LOCAL
+            if (data->sync_agents) {
+                wm_check_agents();
+                wm_scan_directory(DEFAULTDIR AGENTINFO_DIR);
+                wm_scan_directory(DEFAULTDIR GROUPS_DIR);
+            }
 #endif
+            if (data->sync_syscheck) {
+                wm_scan_directory(DEFAULTDIR SYSCHECK_DIR);
+            }
+
+            if (data->sync_rootcheck) {
+                wm_scan_directory(DEFAULTDIR ROOTCHECK_DIR);
+            }
+
+            gettime(&spec1);
+            time_sub(&spec1, &spec0);
+            mtdebug1(WM_DATABASE_LOGTAG, "Cycle completed: %.3lf ms (%.3f clock ms).", spec1.tv_sec * 1000 + spec1.tv_nsec / 1000000.0, (double)(clock() - cstart) / CLOCKS_PER_SEC * 1000);
+
+            if (tsleep = tstart + data->interval - time(NULL), tsleep >= 0) {
+                sleep(tsleep);
+            } else {
+                mtwarn(WM_DATABASE_LOGTAG, "Time interval exceeded by %ld seconds.", -tsleep);
+            }
+        }
+#ifdef INOTIFY_ENABLED
+    }
+#endif
+
     return NULL;
 }
 
 // Update manager information
 void wm_sync_manager() {
     char hostname[1024];
-    const char *os_uname;
+    char *os_uname;
     const char *path;
     char *os_name = NULL;
     char *os_major = NULL;
@@ -233,6 +205,7 @@ void wm_sync_manager() {
     char *os_version = NULL;
     char *os_codename = NULL;
     char *os_platform = NULL;
+    char *os_arch = NULL;
     struct stat buffer;
     regmatch_t match[2];
     int match_size;
@@ -242,7 +215,24 @@ void wm_sync_manager() {
     else
         mterror(WM_DATABASE_LOGTAG, "Couldn't get manager's hostname: %s.", strerror(errno));
 
-    if ((os_uname = getuname())) {
+    /* Get node name of the manager in cluster */
+    char* node_name;
+
+    const char *(xml_node[]) = {"ossec_config", "cluster", "node_name", NULL};
+
+    OS_XML xml;
+
+    if (OS_ReadXML(DEFAULTCPATH, &xml) < 0){
+        merror_exit(XML_ERROR, DEFAULTCPATH, xml.err, xml.err_line);
+    }
+
+    node_name = OS_GetOneContentforElement(&xml, xml_node);
+
+    OS_ClearXML(&xml);
+
+    if ((os_uname = strdup(getuname()))) {
+        os_arch = (char *) malloc(50);
+        os_arch = wm_get_os_arch(os_uname);
         char *ptr;
 
         if ((ptr = strstr(os_uname, " - ")))
@@ -287,10 +277,12 @@ void wm_sync_manager() {
             }
         }
 
-        wdb_update_agent_version(0, os_name, os_version, os_major, os_minor, os_codename, os_platform, os_build, os_uname, __ossec_name " " __ossec_version, NULL);
+        wdb_update_agent_version(0, os_name, os_version, os_major, os_minor, os_codename, os_platform, os_build, os_uname, os_arch, __ossec_name " " __ossec_version, NULL, NULL, hostname, node_name);
 
+        free(node_name);
         free(os_major);
         free(os_minor);
+        free(os_uname);
     }
 
     // Set starting offset if full_sync disabled
@@ -298,7 +290,7 @@ void wm_sync_manager() {
     if (!module->full_sync) {
         path = DEFAULTDIR SYSCHECK_DIR "/syscheck";
 
-        // Don't print error if stat fails bacause syscheck and rootcheck must not exist
+        // Don't print error if stat fails because syscheck and rootcheck must not exist
 
         if (!stat(path, &buffer) && buffer.st_size > 0) {
             switch (wdb_get_agent_status(0)) {
@@ -317,7 +309,8 @@ void wm_sync_manager() {
     }
 }
 
-#ifndef INOTIFY_ENABLED
+#ifndef LOCAL
+
 void wm_check_agents() {
     static time_t timestamp = 0;
     static ino_t inode = 0;
@@ -334,22 +327,26 @@ void wm_check_agents() {
         }
     }
 }
-#endif
 
 // Synchronize agents
 void wm_sync_agents() {
     unsigned int i;
     char path[PATH_MAX] = "";
+    char group[KEYSIZE];
     char cidr[20];
     keystore keys = KEYSTORE_INITIALIZER;
     keyentry *entry;
     int *agents;
     clock_t clock0 = clock();
+    struct timespec spec0;
+    struct timespec spec1;
     struct stat buffer;
+
+    gettime(&spec0);
 
     mtdebug1(WM_DATABASE_LOGTAG, "Synchronizing agents.");
     OS_PassEmptyKeyfile();
-    OS_ReadKeys(&keys, 0, 0);
+    OS_ReadKeys(&keys, 0, 0, 0);
 
     /* Insert new entries */
 
@@ -364,7 +361,11 @@ void wm_sync_agents() {
             continue;
         }
 
-        if (!(wdb_insert_agent(id, entry->name, OS_CIDRtoStr(entry->ip, cidr, 20) ? entry->ip->ip : cidr, entry->key) || module->full_sync)) {
+        group[0] = '\0';
+        get_agent_group(entry->id, group, KEYSIZE);
+
+        if (!(wdb_insert_agent(id, entry->name, OS_CIDRtoStr(entry->ip, cidr, 20) ? entry->ip->ip : cidr, entry->key, *group ? group : NULL) || module->full_sync)) {
+
             // Find files
 
             snprintf(path, PATH_MAX, "%s/(%s) %s->syscheck", DEFAULTDIR SYSCHECK_DIR, entry->name, entry->ip->ip);
@@ -382,6 +383,9 @@ void wm_sync_agents() {
                     mterror(WM_DATABASE_LOGTAG, FSTAT_ERROR, path, errno, strerror(errno));
             } else if (wdb_set_agent_offset(id, WDB_SYSCHECK_REGISTRY, buffer.st_size) < 1)
                 mterror(WM_DATABASE_LOGTAG, "Couldn't write offset data on database for agent %d (%s).", id, entry->name);
+        } else {
+            // The agent already exists, update group only.
+            wm_sync_agent_group(id, entry->id);
         }
     }
 
@@ -394,7 +398,9 @@ void wm_sync_agents() {
             snprintf(id, 9, "%03d", agents[i]);
 
             if (OS_IsAllowedID(&keys, id) == -1)
-                wdb_remove_agent(agents[i]);
+                if (wdb_remove_agent(agents[i]) < 0) {
+                    mtdebug1(WM_DATABASE_LOGTAG, "Couldn't remove agent %s", id);
+                }
             }
 
         free(agents);
@@ -402,13 +408,83 @@ void wm_sync_agents() {
 
     OS_FreeKeys(&keys);
     mtdebug1(WM_DATABASE_LOGTAG, "Agent sync completed.");
-    mtdebug2(WM_DATABASE_LOGTAG, "wm_sync_agents(): %.3f ms.", (double)(clock() - clock0) / CLOCKS_PER_SEC * 1000);
+    gettime(&spec1);
+    time_sub(&spec1, &spec0);
+    mtdebug1(WM_DATABASE_LOGTAG, "wm_sync_agents(): %.3f ms (%.3f clock ms).", spec1.tv_sec * 1000 + spec1.tv_nsec / 1000000.0, (double)(clock() - clock0) / CLOCKS_PER_SEC * 1000);
+}
+
+// Clean dangling database files
+void wm_clean_dangling_db() {
+    char dirname[PATH_MAX + 1];
+    char path[PATH_MAX + 1];
+    char * end;
+    char * name;
+    struct dirent * dirent;
+    DIR * dir;
+
+    snprintf(dirname, sizeof(dirname), "%s%s/agents", isChroot() ? "/" : "", WDB_DIR);
+    mtdebug1(WM_DATABASE_LOGTAG, "Cleaning directory '%s'.", dirname);
+
+    if (!(dir = opendir(dirname))) {
+        mterror(WM_DATABASE_LOGTAG, "Couldn't open directory '%s': %s.", dirname, strerror(errno));
+        return;
+    }
+
+    while ((dirent = readdir(dir))) {
+        if (dirent->d_name[0] != '.') {
+            if (end = strchr(dirent->d_name, '-'), end) {
+                *end = 0;
+
+                if (name = wdb_agent_name(atoi(dirent->d_name)), name) {
+                    // Agent found: OK
+                    free(name);
+                } else {
+                    *end = '-';
+
+                    if (snprintf(path, sizeof(path), "%s/%s", dirname, dirent->d_name) < (int)sizeof(path)) {
+                        mtwarn(WM_DATABASE_LOGTAG, "Removing dangling DB file: '%s'", path);
+                        if (remove(path) < 0) {
+                            mtdebug1(WM_DATABASE_LOGTAG, DELETE_ERROR, path, errno, strerror(errno));
+                        }
+                    }
+                }
+            } else {
+                mtwarn(WM_DATABASE_LOGTAG, "Strange file found: '%s/%s'", dirname, dirent->d_name);
+            }
+        }
+    }
+
+    closedir(dir);
+}
+
+#endif // LOCAL
+
+char * wm_get_os_arch(char * os_header) {
+    const char * ARCHS[] = { "x86_64", "i386", "i686", "sparc", "amd64", "ia64", "AIX", "armv6", "armv7", NULL };
+    char * os_arch;
+    int i;
+
+    for (i = 0; ARCHS[i]; i++) {
+        if (strstr(os_header, ARCHS[i])) {
+            os_strdup(ARCHS[i], os_arch);
+            break;
+        }
+    }
+
+    if (!ARCHS[i]) {
+        os_strdup("", os_arch);
+    }
+
+    mtdebug2(WM_DATABASE_LOGTAG, "Detected architecture from %s: %s", os_header, os_arch);
+    return os_arch;
 }
 
 int wm_sync_agentinfo(int id_agent, const char *path) {
-    char buffer[OS_MAXSTR];
-    char *os;
-    char *version;
+    char header[OS_MAXSTR];
+    char files[OS_MAXSTR];
+    char file[OS_MAXSTR];
+    char *os = NULL;
+    char *version = NULL;
     char *os_name = NULL;
     char *os_major = NULL;
     char *os_minor = NULL;
@@ -416,7 +492,14 @@ int wm_sync_agentinfo(int id_agent, const char *path) {
     char *os_version = NULL;
     char *os_codename = NULL;
     char *os_platform = NULL;
-    char *shared_sum;
+    char *os_arch = NULL;
+    char *config_sum = NULL;
+    char *merged_sum = NULL;
+    char manager_host[512] = "";
+    char node_name[512] = "";
+    char *end;
+    char *end_manager;
+    char *end_node;
     char *end_line;
     FILE *fp;
     int result;
@@ -429,118 +512,179 @@ int wm_sync_agentinfo(int id_agent, const char *path) {
         return -1;
     }
 
-    os = fgets(buffer, OS_MAXSTR, fp);
-    fclose(fp);
+    if (os = fgets(header, OS_MAXSTR, fp), !os) {
+        mtdebug1(WM_DATABASE_LOGTAG, "Empty file '%s'. Agent is pending.", path);
 
-    if (!os) {
-        mterror(WM_DATABASE_LOGTAG, "Couldn't read file '%s'.", path);
-        return -1;
-    }
 
-    if (end_line = strstr(os, "\n"), end_line){
-        *end_line = '\0';
     } else {
-        mtwarn(WM_DATABASE_LOGTAG, "Corrupt line found parsing '%s' (incomplete). Returning.", path);
-        return -1;
-    }
 
-    if (shared_sum = strstr(os, " / "), shared_sum){
-        *shared_sum = '\0';
-        shared_sum += 3;
-    }
-
-    if (version = strstr(os, " - "), version){
-        *version = '\0';
-        version += 3;
-    } else {
-        mterror(WM_DATABASE_LOGTAG, "Corrupt file '%s'.", path);
-        return -1;
-    }
-
-    // [Ver: os_major.os_minor.os_build]
-    if (os_version = strstr(os, " [Ver: "), os_version){
-        *os_version = '\0';
-        os_version += 7;
-        os_name = os;
-        *(os_version + strlen(os_version) - 1) = '\0';
-
-        // Get os_major
-
-        if (w_regexec("^([0-9]+)\\.*", os_version, 2, match)) {
-            match_size = match[1].rm_eo - match[1].rm_so;
-            os_major = malloc(match_size +1 );
-            snprintf (os_major, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+        if (end_line = strstr(os, "\n"), end_line){
+            *end_line = '\0';
+        } else {
+            mtwarn(WM_DATABASE_LOGTAG, "Corrupt line found parsing '%s' (incomplete). Returning.", path);
+            fclose(fp);
+            return -1;
         }
 
-        // Get os_minor
-
-        if (w_regexec("^[0-9]+\\.([0-9]+)\\.*", os_version, 2, match)) {
-            match_size = match[1].rm_eo - match[1].rm_so;
-            os_minor = malloc(match_size +1);
-            snprintf(os_minor, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+        if (config_sum = strstr(os, " / "), config_sum){
+            *config_sum = '\0';
+            config_sum += 3;
         }
 
-        // Get os_build
-
-        if (w_regexec("^[0-9]+\\.[0-9]+\\.([0-9]+)\\.*", os_version, 2, match)) {
-            match_size = match[1].rm_eo - match[1].rm_so;
-            os_build = malloc(match_size +1);
-            snprintf(os_build, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+        if (version = strstr(os, " - "), version){
+            *version = '\0';
+            version += 3;
+        } else {
+            mterror(WM_DATABASE_LOGTAG, "Corrupt file '%s'.", path);
+            fclose(fp);
+            return -1;
         }
 
-        result = wdb_update_agent_version(id_agent, os_name, os_version, os_major, os_minor, os_codename, "windows", os_build, os, version, shared_sum);
+        // [Ver: os_major.os_minor.os_build]
+        if (os_version = strstr(os, " [Ver: "), os_version){
+            *os_version = '\0';
+            os_version += 7;
+            os_name = os;
+            *(os_version + strlen(os_version) - 1) = '\0';
 
-        free(os_major);
-        free(os_minor);
-        free(os_build);
-    }
-    else {
-        if (os_name = strstr(os, " ["), os_name){
-            *os_name = '\0';
-            os_name += 2;
-            if (os_version = strstr(os_name, ": "), os_version){
-                *os_version = '\0';
-                os_version += 2;
-                *(os_version + strlen(os_version) - 1) = '\0';
+            // Get os_major
 
-                // os_major.os_minor (os_codename)
-                if (os_codename = strstr(os_version, " ("), os_codename){
-                    *os_codename = '\0';
-                    os_codename += 2;
-                    *(os_codename + strlen(os_codename) - 1) = '\0';
+            if (w_regexec("^([0-9]+)\\.*", os_version, 2, match)) {
+                match_size = match[1].rm_eo - match[1].rm_so;
+                os_major = malloc(match_size +1 );
+                snprintf (os_major, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+            }
+
+            // Get os_minor
+
+            if (w_regexec("^[0-9]+\\.([0-9]+)\\.*", os_version, 2, match)) {
+                match_size = match[1].rm_eo - match[1].rm_so;
+                os_minor = malloc(match_size +1);
+                snprintf(os_minor, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+            }
+
+            // Get os_build
+
+            if (w_regexec("^[0-9]+\\.[0-9]+\\.([0-9]+)\\.*", os_version, 2, match)) {
+                match_size = match[1].rm_eo - match[1].rm_so;
+                os_build = malloc(match_size +1);
+                snprintf(os_build, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+            }
+
+            os_platform = "windows";
+        }
+        else {
+            if (os_name = strstr(os, " ["), os_name){
+                *os_name = '\0';
+                os_name += 2;
+                if (os_version = strstr(os_name, ": "), os_version){
+                    *os_version = '\0';
+                    os_version += 2;
+                    *(os_version + strlen(os_version) - 1) = '\0';
+
+                    // os_major.os_minor (os_codename)
+                    if (os_codename = strstr(os_version, " ("), os_codename){
+                        *os_codename = '\0';
+                        os_codename += 2;
+                        *(os_codename + strlen(os_codename) - 1) = '\0';
+                    }
+
+                    // Get os_major
+                    if (w_regexec("^([0-9]+)\\.*", os_version, 2, match)) {
+                        match_size = match[1].rm_eo - match[1].rm_so;
+                        os_major = malloc(match_size +1);
+                        snprintf(os_major, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+                    }
+
+                    // Get os_minor
+                    if (w_regexec("^[0-9]+\\.([0-9]+)\\.*", os_version, 2, match)) {
+                        match_size = match[1].rm_eo - match[1].rm_so;
+                        os_minor = malloc(match_size +1);
+                        snprintf(os_minor, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+                    }
+
+                } else
+                    *(os_name + strlen(os_name) - 1) = '\0';
+
+                // os_name|os_platform
+                if (os_platform = strstr(os_name, "|"), os_platform){
+                    *os_platform = '\0';
+                    os_platform ++;
                 }
+            }
+            os_arch = wm_get_os_arch(os);
+        }
 
-                // Get os_major
-                if (w_regexec("^([0-9]+)\\.*", os_version, 2, match)) {
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    os_major = malloc(match_size +1);
-                    snprintf(os_major, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+        // Search for merged.mg sum
+
+        while (end = NULL, merged_sum = fgets(files, OS_MAXSTR, fp), merged_sum) {
+            if (*merged_sum != '\"' && *merged_sum != '!' && (end = strchr(merged_sum, ' '), end)) {
+                *end = '\0';
+
+                if (strcmp(end + 1, SHAREDCFG_FILENAME "\n") == 0) {
+                    break;
                 }
+            }
 
-                // Get os_minor
-                if (w_regexec("^[0-9]+\\.([0-9]+)\\.*", os_version, 2, match)) {
-                    match_size = match[1].rm_eo - match[1].rm_so;
-                    os_minor = malloc(match_size +1);
-                    snprintf(os_minor, match_size + 1, "%.*s", match_size, os_version + match[1].rm_so);
+            merged_sum = NULL;
+        }
+
+        // Search for manager hostname connected to the agent and the node name of the cluster
+
+        const char * MANAGER_HOST = "#\"manager_hostname\":";
+        const char * NODE_NAME = "#\"node_name\":";
+
+        while (fgets(file, OS_MAXSTR, fp)) {
+            if (!strncmp(file, MANAGER_HOST, strlen(MANAGER_HOST))) {
+                strncpy(manager_host, file + strlen(MANAGER_HOST), sizeof(manager_host) - 1);
+                manager_host[sizeof(manager_host) - 1] = '\0';
+
+                if (end_manager = strchr(manager_host, '\n'), end_manager){
+                    *end_manager = '\0';
                 }
+            }
+            if (!strncmp(file, NODE_NAME, strlen(NODE_NAME))) {
+                strncpy(node_name, file + strlen(NODE_NAME), sizeof(node_name) - 1);
+                node_name[sizeof(node_name) - 1] = '\0';
 
-            } else
-                *(os_name + strlen(os_name) - 1) = '\0';
-
-            // os_name|os_platform
-            if (os_platform = strstr(os_name, "|"), os_platform){
-                *os_platform = '\0';
-                os_platform ++;
+                if (end_node = strchr(node_name, '\n'), end_node){
+                    *end_node = '\0';
+                }
             }
         }
-
-        result = wdb_update_agent_version(id_agent, os_name, os_version, os_major, os_minor, os_codename, os_platform, os_build, os, version, shared_sum);
-
-        free(os_major);
-        free(os_minor);
     }
 
+
+    result = wdb_update_agent_version(id_agent, os_name, os_version, os_major, os_minor, os_codename, os_platform, os_build, os, os_arch, version, config_sum, merged_sum, manager_host, node_name);
     mtdebug2(WM_DATABASE_LOGTAG, "wm_sync_agentinfo(%d): %.3f ms.", id_agent, (double)(clock() - clock0) / CLOCKS_PER_SEC * 1000);
+
+    free(os_major);
+    free(os_minor);
+    free(os_build);
+    fclose(fp);
+    return result;
+}
+
+int wm_sync_agent_group(int id_agent, const char *fname) {
+    int result = 0;
+    char group[KEYSIZE] = "";
+    clock_t clock0 = clock();
+
+    get_agent_group(fname, group, KEYSIZE);
+
+    switch (wdb_update_agent_group(id_agent, *group ? group : NULL)) {
+    case -1:
+        mterror(WM_DATABASE_LOGTAG, "Couldn't sync agent '%s' group.", fname);
+        result = -1;
+        break;
+    case 0:
+        mtdebug1(WM_DATABASE_LOGTAG, "No such agent '%s' on DB when updating group.", fname);
+        break;
+    default:
+        break;
+    }
+
+    mtdebug2(WM_DATABASE_LOGTAG, "wm_sync_agent_group(%d): %.3f ms.", id_agent, (double)(clock() - clock0) / CLOCKS_PER_SEC * 1000);
     return result;
 }
 
@@ -576,8 +720,12 @@ int wm_sync_file(const char *dirname, const char *fname) {
     int type;
     sqlite3 *db;
 
-    mtdebug1(WM_DATABASE_LOGTAG, "Synchronizing file '%s/%s'", dirname, fname);
-    snprintf(path, PATH_MAX, "%s/%s", dirname, fname);
+    mtdebug2(WM_DATABASE_LOGTAG, "Synchronizing file '%s/%s'", dirname, fname);
+
+    if (snprintf(path, PATH_MAX, "%s/%s", dirname, fname) >= PATH_MAX) {
+        mterror(WM_DATABASE_LOGTAG, "At wm_sync_file(): Path '%s/%s' exceeded length limit.", dirname, fname);
+        return -1;
+    }
 
     if (!strcmp(dirname, DEFAULTDIR AGENTINFO_DIR))
         type = WDB_AGENTINFO;
@@ -595,39 +743,54 @@ int wm_sync_file(const char *dirname, const char *fname) {
             id_agent = 0;
             strcpy(name, "localhost");
         }
+    } else if (!strcmp(dirname, DEFAULTDIR GROUPS_DIR)) {
+        type = WDB_GROUPS;
     } else {
         mterror(WM_DATABASE_LOGTAG, "Directory name '%s' not recognized.", dirname);
         return -1;
     }
 
-    // If id_agent != 0, then the file corresponds to an agent
+    switch (type) {
+    case WDB_GROUPS:
+        id_agent = atoi(fname);
 
-    if (id_agent) {
-        switch (wm_extract_agent(fname, name, addr, &is_registry)) {
-        case 0:
-            if ((id_agent = wdb_find_agent(name, addr)) < 0) {
-                mtdebug2(WM_DATABASE_LOGTAG, "No such agent at database for file %s/%s", dirname, fname);
-                return -1;
-            }
-
-            if (is_registry)
-                type = WDB_SYSCHECK_REGISTRY;
-
-            break;
-
-        case 1:
-            mtdebug1(WM_DATABASE_LOGTAG, "Ignoring file '%s/%s'", dirname, fname);
-            return 0;
-
-        default:
-            mtwarn(WM_DATABASE_LOGTAG, "Couldn't extract agent name and address from file %s/%s", dirname, fname);
+        if (!id_agent) {
+            mterror(WM_DATABASE_LOGTAG, "Couldn't extract agent ID from file %s/%s", dirname, fname);
             return -1;
         }
-    }
 
-    if (stat(path, &buffer) < 0) {
-        mterror(WM_DATABASE_LOGTAG, FSTAT_ERROR, path, errno, strerror(errno));
-        return -1;
+        break;
+
+    default:
+        // If id_agent != 0, then the file corresponds to an agent
+
+        if (id_agent) {
+            switch (wm_extract_agent(fname, name, addr, &is_registry)) {
+            case 0:
+                if ((id_agent = wdb_find_agent(name, addr)) < 0) {
+                    mtdebug1(WM_DATABASE_LOGTAG, "No such agent at database for file %s/%s", dirname, fname);
+                    return -1;
+                }
+
+                if (is_registry)
+                    type = WDB_SYSCHECK_REGISTRY;
+
+                break;
+
+            case 1:
+                mtdebug1(WM_DATABASE_LOGTAG, "Ignoring file '%s/%s'", dirname, fname);
+                return 0;
+
+            default:
+                mterror(WM_DATABASE_LOGTAG, "Couldn't extract agent name and address from file %s/%s", dirname, fname);
+                return -1;
+            }
+        }
+
+        if (stat(path, &buffer) < 0) {
+            mterror(WM_DATABASE_LOGTAG, FSTAT_ERROR, path, errno, strerror(errno));
+            return -1;
+        }
     }
 
     switch (wdb_get_agent_status(id_agent)) {
@@ -722,6 +885,11 @@ int wm_sync_file(const char *dirname, const char *fname) {
 
     case WDB_AGENTINFO:
         result = wm_sync_agentinfo(id_agent, path) < 0 || wdb_update_agent_keepalive(id_agent, buffer.st_mtime) < 0 ? -1 : 0;
+        break;
+
+    case WDB_GROUPS:
+        result = wm_sync_agent_group(id_agent, fname);
+        break;
     }
 
     return result;
@@ -868,7 +1036,8 @@ int wm_fill_rootcheck(sqlite3 *db, const char *path) {
                     continue;
                 }
 
-                // Don't break
+                count++;
+                break;
 
             default:
                 count++;
@@ -964,7 +1133,8 @@ wmodule* wm_database_read() {
     data.sync_syscheck = getDefine_Int("wazuh_database", "sync_syscheck", 0, 1);
     data.sync_rootcheck = getDefine_Int("wazuh_database", "sync_rootcheck", 0, 1);
     data.full_sync = getDefine_Int("wazuh_database", "full_sync", 0, 1);
-    data.sleep = getDefine_Int("wazuh_database", "sleep", 0, 86400);
+    data.real_time = getDefine_Int("wazuh_database", "real_time", 0, 1);
+    data.interval = getDefine_Int("wazuh_database", "interval", 0, 86400);
     data.max_queued_events = getDefine_Int("wazuh_database", "max_queued_events", 0, INT_MAX);
 
     if (data.sync_agents || data.sync_syscheck || data.sync_rootcheck) {
@@ -1015,6 +1185,241 @@ int set_max_queued_events(int size) {
     return 0;
 }
 
-#endif
+// Setup inotify reader
+void wm_inotify_setup(wm_database * data) {
+    int old_max_queued_events = -1;
+
+    // Create hash table
+
+    if (ptable = OSHash_Create(), !ptable) {
+        merror_exit("At wm_inotify_setup(): OSHash_Create()");
+    }
+
+    // Create queue
+    if (queue = queue_init(data->max_queued_events > 0 ? data->max_queued_events : 16384), !queue) {
+        merror_exit("At wm_inotify_setup(): queue_init()");
+    }
+
+    // Set inotify queued events limit
+
+    if (data->max_queued_events) {
+        old_max_queued_events = get_max_queued_events();
+
+        if (old_max_queued_events >= 0 && old_max_queued_events != data->max_queued_events) {
+            mtdebug1(WM_DATABASE_LOGTAG, "Setting inotify queued events limit to '%d'", data->max_queued_events);
+
+            if (set_max_queued_events(data->max_queued_events) < 0) {
+                // Error: do not reset then
+                old_max_queued_events = -1;
+            }
+        }
+    }
+
+    // Start inotify
+
+    if (inotify_fd = inotify_init(), inotify_fd < 0) {
+        mterror_exit(WM_DATABASE_LOGTAG, "Couldn't init inotify: %s.", strerror(errno));
+    }
+
+    // Reset inotify queued events limit
+
+    if (old_max_queued_events >= 0 && old_max_queued_events != data->max_queued_events) {
+        mtdebug2(WM_DATABASE_LOGTAG, "Restoring inotify queued events limit to '%d'", old_max_queued_events);
+        set_max_queued_events(old_max_queued_events);
+    }
+
+    // Run thread
+    w_create_thread(wm_inotify_start, NULL);
+
+    // First synchronization and add watch for client.keys, Agent info, Syscheck and Rootcheck directories
+
+#ifndef LOCAL
+
+    char keysfile_path[] = KEYSFILE_PATH;
+    char * keysfile_dir = dirname(keysfile_path);
+
+    if (data->sync_agents) {
+        if ((wd_agents = inotify_add_watch(inotify_fd, keysfile_dir, IN_CLOSE_WRITE | IN_MOVED_TO)) < 0)
+            mterror(WM_DATABASE_LOGTAG, "Couldn't watch client.keys file: %s.", strerror(errno));
+
+        mtdebug2(WM_DATABASE_LOGTAG, "wd_agents='%d'", wd_agents);
+
+        if ((wd_agentinfo = inotify_add_watch(inotify_fd, DEFAULTDIR AGENTINFO_DIR, IN_CLOSE_WRITE | IN_ATTRIB | IN_MOVED_TO)) < 0)
+            mterror(WM_DATABASE_LOGTAG, "Couldn't watch the agent info directory: %s.", strerror(errno));
+
+        mtdebug2(WM_DATABASE_LOGTAG, "wd_agentinfo='%d'", wd_agentinfo);
+
+        if ((wd_groups = inotify_add_watch(inotify_fd, DEFAULTDIR GROUPS_DIR, IN_CLOSE_WRITE | IN_MOVED_TO | IN_DELETE)) < 0)
+            mterror(WM_DATABASE_LOGTAG, "Couldn't watch the agent groups directory: %s.", strerror(errno));
+
+        mtdebug2(WM_DATABASE_LOGTAG, "wd_groups='%d'", wd_groups);
+
+        wm_sync_agents();
+        wm_scan_directory(DEFAULTDIR AGENTINFO_DIR);
+    }
 
 #endif
+
+    if (data->sync_syscheck) {
+        if ((wd_syscheck = inotify_add_watch(inotify_fd, DEFAULTDIR SYSCHECK_DIR, IN_MODIFY)) < 0)
+            mterror(WM_DATABASE_LOGTAG, "Couldn't watch Syscheck directory: %s.", strerror(errno));
+
+        mtdebug2(WM_DATABASE_LOGTAG, "wd_syscheck='%d'", wd_syscheck);
+        wm_scan_directory(DEFAULTDIR SYSCHECK_DIR);
+    }
+
+    if (data->sync_rootcheck) {
+        if ((wd_rootcheck = inotify_add_watch(inotify_fd, DEFAULTDIR ROOTCHECK_DIR, IN_MODIFY)) < 0)
+            mterror(WM_DATABASE_LOGTAG, "Couldn't watch Rootcheck directory: %s.", strerror(errno));
+
+        mtdebug2(WM_DATABASE_LOGTAG, "wd_rootcheck='%d'", wd_rootcheck);
+        wm_scan_directory(DEFAULTDIR ROOTCHECK_DIR);
+    }
+}
+
+// Real time inotify reader thread
+static void * wm_inotify_start(__attribute__((unused)) void * args) {
+    char buffer[IN_BUFFER_SIZE];
+    char keysfile_dir[] = KEYSFILE_PATH;
+    char * keysfile = keysfile_dir;
+    struct inotify_event *event = (struct inotify_event *)buffer;
+    char * dirname = NULL;
+    ssize_t count;
+    size_t i;
+
+        if (!(keysfile = strrchr(keysfile_dir, '/'))) {
+            mterror_exit(WM_DATABASE_LOGTAG, "Couldn't decode keys file path '%s'.", keysfile_dir);
+        }
+
+        *(keysfile++) = '\0';
+
+    // Loop
+
+    while (1) {
+
+            // Wait for changes
+
+            mtdebug1(WM_DATABASE_LOGTAG, "Waiting for event notification...");
+
+            do {
+                if (count = read(inotify_fd, buffer, IN_BUFFER_SIZE), count < 0) {
+                    if (errno != EAGAIN)
+                        mterror(WM_DATABASE_LOGTAG, "read(): %s.", strerror(errno));
+
+                    break;
+                }
+
+                buffer[count - 1] = '\0';
+
+                for (i = 0; i < (size_t)count; i += (ssize_t)(sizeof(struct inotify_event) + event->len)) {
+                    event = (struct inotify_event*)&buffer[i];
+                    mtdebug2(WM_DATABASE_LOGTAG, "inotify: i='%zu', name='%s', mask='%u', wd='%d'", i, event->name, event->mask, event->wd);
+
+                    if (event->len > IN_BUFFER_SIZE) {
+                        mterror(WM_DATABASE_LOGTAG, "Inotify event too large (%u)", event->len);
+                        break;
+                    }
+
+                    if (event->name[0] == '.') {
+                        mtdebug2(WM_DATABASE_LOGTAG, "Discarding hidden file.");
+                        continue;
+                    }
+#ifndef LOCAL
+                    if (event->wd == wd_agents) {
+                        if (!strcmp(event->name, keysfile)) {
+                            dirname = keysfile_dir;
+                        } else {
+                            continue;
+                        }
+                    } else if (event->wd == wd_agentinfo) {
+                        dirname = DEFAULTDIR AGENTINFO_DIR;
+                    } else if (event->wd == wd_groups) {
+                        dirname = DEFAULTDIR GROUPS_DIR;
+                    } else
+#endif
+                    if (event->wd == wd_syscheck) {
+                        dirname = DEFAULTDIR SYSCHECK_DIR;
+                    } else if (event->wd == wd_rootcheck) {
+                        dirname = DEFAULTDIR ROOTCHECK_DIR;
+                    } else if (event->wd == -1 && event->mask == IN_Q_OVERFLOW) {
+                        mterror(WM_DATABASE_LOGTAG, "Inotify event queue overflowed.");
+                        continue;
+                    } else {
+                        mterror(WM_DATABASE_LOGTAG, "Unknown watch descriptor '%d', mask='%u'.", event->wd, event->mask);
+                        continue;
+                    }
+
+                    wm_inotify_push(dirname, event->name);
+                }
+            } while (count > 0);
+        }
+
+    return NULL;
+}
+
+// Insert request into internal structure
+void wm_inotify_push(const char * dirname, const char * fname) {
+    char path[PATH_MAX + 1];
+    char * dup;
+
+    if (snprintf(path, sizeof(path), "%s/%s", dirname, fname) >= (int)sizeof(path)) {
+        mterror(WM_DATABASE_LOGTAG, "At wm_inotify_push(): Path too long: '%s'/'%s'", dirname, fname);
+        return;
+    }
+
+    w_mutex_lock(&mutex_queue);
+
+    if (queue_full(queue)) {
+        mterror(WM_DATABASE_LOGTAG, "Internal queue is full (%zu).", queue->size);
+        goto end;
+    }
+
+    switch (OSHash_Add(ptable, path, (void *)1)) {
+    case 0:
+        mterror(WM_DATABASE_LOGTAG, "Couldn't insert key into table.");
+        break;
+
+    case 1:
+        mtdebug2(WM_DATABASE_LOGTAG, "Adding '%s': file already exists at path table.", path);
+        break;
+
+    case 2:
+        os_strdup(path, dup);
+        mtdebug2(WM_DATABASE_LOGTAG, "Adding '%s' to path table.", path);
+
+        if (queue_push(queue, dup) < 0) {
+            mterror(WM_DATABASE_LOGTAG, "Couldn't insert key into queue.");
+            free(dup);
+        }
+
+        w_cond_signal(&cond_pending);
+    }
+
+end:
+    w_mutex_unlock(&mutex_queue);
+}
+
+// Extract enqueued path from internal structure
+char * wm_inotify_pop() {
+    char * path;
+
+    w_mutex_lock(&mutex_queue);
+
+    while (queue_empty(queue)) {
+        w_cond_wait(&cond_pending, &mutex_queue);
+    }
+
+    path = queue_pop(queue);
+
+    if (!OSHash_Delete(ptable, path)) {
+        mterror(WM_DATABASE_LOGTAG, "Couldn't delete key '%s' from path table.", path);
+    }
+
+    w_mutex_unlock(&mutex_queue);
+    mtdebug2(WM_DATABASE_LOGTAG, "Taking '%s' from path table.", path);
+    return path;
+}
+
+#endif // INOTIFY_ENABLED
+
+#endif // !WIN32

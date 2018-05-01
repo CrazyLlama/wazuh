@@ -6,6 +6,7 @@
 #include "json_extended.h"
 #include <stddef.h>
 #include "config.h"
+#include <regex.h>
 
 #define MAX_MATCHES 10
 #define MAX_STRING 1024
@@ -14,7 +15,7 @@
 void W_ParseJSON(cJSON* root, const Eventinfo* lf)
 {
     // Parse hostname & Parse AGENTIP
-    if(lf->hostname) {
+    if(lf->full_log && lf->hostname) {
         W_JSON_ParseHostname(root, lf);
         W_JSON_ParseAgentIP(root, lf);
     }
@@ -235,13 +236,19 @@ void W_JSON_ParseHostname(cJSON* root,const Eventinfo* lf)
 {
     cJSON* agent;
     cJSON* manager;
+    cJSON* predecoder;
     cJSON * name;
     agent = cJSON_GetObjectItem(root, "agent");
     manager = cJSON_GetObjectItem(root, "manager");
+
     if(lf->hostname[0] == '(') {
         char* search;
+        char* agent_hostname = NULL;
         char string[MAX_STRING] = "";
         int index;
+        regex_t regexCompiled;
+        regmatch_t match[2];
+        int match_size;
 
         strncpy(string, lf->hostname, MAX_STRING - 1);
         search = strchr(string, ')');
@@ -252,43 +259,61 @@ void W_JSON_ParseHostname(cJSON* root,const Eventinfo* lf)
             str_cut(string, 0, 1);
             cJSON_AddStringToObject(agent, "name", string);
         }
-    } else if(lf->agent_id && !strcmp(lf->agent_id, "000")){
-        if (name = cJSON_GetObjectItem(manager,"name"), name) {
-            cJSON_AddItemReferenceToObject(agent, "name", name);
+
+        // Get agent hostname
+        static const char *pattern = "^[A-Z][a-z][a-z] [ 0123][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] ([^ ]+)";
+        if (regcomp(&regexCompiled, pattern, REG_EXTENDED)) {
+            merror_exit("Can not compile regular expression.");
+        }
+        if(regexec(&regexCompiled, lf->full_log, 2, match, 0) == 0){
+            match_size = match[1].rm_eo - match[1].rm_so;
+            agent_hostname = malloc(match_size + 1);
+            snprintf (agent_hostname, match_size + 1, "%.*s", match_size, lf->full_log + match[1].rm_so);
+
+            if (!cJSON_HasObjectItem(root, "predecoder")) {
+                cJSON_AddItemToObject(root, "predecoder", predecoder = cJSON_CreateObject());
+            } else {
+                predecoder = cJSON_GetObjectItem(root, "predecoder");
+            }
+
+            cJSON_AddStringToObject(predecoder, "hostname", agent_hostname);
+            free(agent_hostname);
+        }
+        regfree(&regexCompiled);
+
+    } else {
+
+        if (!cJSON_HasObjectItem(root, "predecoder")) {
+            cJSON_AddItemToObject(root, "predecoder", predecoder = cJSON_CreateObject());
+        } else {
+            predecoder = cJSON_GetObjectItem(root, "predecoder");
         }
 
-        cJSON_AddStringToObject(root, "hostname", lf->hostname);
-    }else{
-        cJSON_AddStringToObject(root, "hostname", lf->hostname);
+        if(lf->agent_id && !strcmp(lf->agent_id, "000")){
+            if (name = cJSON_GetObjectItem(manager,"name"), name) {
+                cJSON_AddItemReferenceToObject(agent, "name", name);
+            }
+
+            cJSON_AddStringToObject(predecoder, "hostname", lf->hostname);
+        }else{
+            cJSON_AddStringToObject(predecoder, "hostname", lf->hostname);
+        }
     }
 }
 // Parse timestamp
 void W_JSON_AddTimestamp(cJSON* root, const Eventinfo* lf)
 {
-    char buffer[25] = "";
+    char timestamp[64];
+    char datetime[64];
+    char timezone[64];
     struct tm tm;
-    time_t timestamp;
-    char *end;
 
-    if (lf->year && lf->mon[0] && lf->day && lf->hour[0]) {
-        timestamp = time(NULL);
-        memcpy(&tm, localtime(&timestamp), sizeof(struct tm));
-
-        if (!(end = strptime(lf->hour, "%T", &tm)) || *end) {
-            merror("Could not parse hour '%s'.", lf->hour);
-            return;
-        }
-
-        if (!(end = strptime(lf->mon, "%b", &tm)) || *end) {
-            merror("Could not parse month '%s'.", lf->mon);
-            return;
-        }
-
-        tm.tm_year = lf->year - 1900;
-        tm.tm_mday = lf->day;
-
-        strftime(buffer, 25, "%FT%T%z", &tm);
-        cJSON_AddStringToObject(root, "timestamp", buffer);
+    if (lf->time.tv_sec) {
+        localtime_r(&lf->time.tv_sec, &tm);
+        strftime(datetime, sizeof(datetime), "%FT%T", &tm);
+        strftime(timezone, sizeof(timezone), "%z", &tm);
+        snprintf(timestamp, sizeof(timestamp), "%s.%ld%s", datetime, lf->time.tv_nsec / 1000000, timezone);
+        cJSON_AddStringToObject(root, "timestamp", timestamp);
     }
 }
 
@@ -479,28 +504,6 @@ int startsWith(const char *pre, const char *str)
     size_t lenpre = strlen(pre),
            lenstr = strlen(str);
     return lenstr < lenpre ? 0 : strncmp(pre, str, lenpre) == 0;
-}
-
-// Add a dynamic field with object nesting
-void W_JSON_AddField(cJSON *root, const char *key, const char *value) {
-    cJSON *object;
-    char *current;
-    char *nest = strchr(key, '.');
-    size_t length;
-
-    if (nest) {
-        length = nest - key;
-        current = malloc(length + 1);
-        strncpy(current, key, length);
-        current[length] = '\0';
-
-        if (!(object = cJSON_GetObjectItem(root, current)))
-            cJSON_AddItemToObject(root, current, object = cJSON_CreateObject());
-
-        W_JSON_AddField(object, nest + 1, value);
-        free(current);
-    } else
-        cJSON_AddStringToObject(root, key, value);
 }
 
 // Parse labels

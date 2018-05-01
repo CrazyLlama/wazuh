@@ -16,19 +16,29 @@
 #include "config/client-config.h"
 
 /* Buffer functions */
-#define full(i, j) ((i + 1) % (agt->buflength + 1) == j)
+#define full(i, j, n) ((i + 1) % (n) == j)
 #define warn(i, j) ((float)((i - j + agt->buflength + 1) % (agt->buflength + 1)) / (float)agt->buflength >= ((float)warn_level/100.0))
 #define nowarn(i, j) ((float)((i - j + agt->buflength + 1) % (agt->buflength + 1)) / (float)agt->buflength <= ((float)warn_level/100.0))
 #define normal(i, j) ((float)((i - j + agt->buflength + 1) % (agt->buflength + 1)) / (float)agt->buflength <= ((float)normal_level/100.0))
 #define capacity(i, j) (float)((i - j + agt->buflength + 1) % (agt->buflength + 1)) / (float)agt->buflength
 #define empty(i, j) (i == j)
-#define forward(x) x = (x + 1) % (agt->buflength + 1)
+#define forward(x, n) x = (x + 1) % (n)
 
 /* Buffer statuses */
 #define NORMAL 0
 #define WARNING 1
 #define FULL 2
 #define FLOOD 3
+
+/* Agent status structure */
+
+typedef struct agent_state_t {
+    agent_status_t status;
+    time_t last_keepalive;
+    time_t last_ack;
+    unsigned int msg_count;
+    unsigned int msg_sent;
+} agent_state_t;
 
 /* Client configuration */
 int ClientConf(const char *cfgfile);
@@ -58,7 +68,7 @@ int buffer_append(const char *msg);
 void *dispatch_buffer(void * arg);
 
 /* Send message to server */
-int send_msg(int agentid, const char *msg);
+int send_msg(const char *msg, ssize_t msg_length);
 
 /* Extract the shared files */
 char *getsharedfiles(void);
@@ -78,6 +88,27 @@ int format_labels(char *str, size_t size);
 // Thread to rotate internal log
 void * w_rotate_log_thread(void * arg);
 
+// Initialize request module
+void req_init();
+
+// Push a request message into dispatching queue. Return 0 on success or -1 on error.
+int req_push(char * buffer, size_t length);
+
+// Request receiver thread start
+void * req_receiver(void * arg);
+
+// Restart agent
+void * restartAgent();
+
+// Verify remote configuration. Return 0 on success or -1 on error.
+int verifyRemoteConf();
+
+// Agent status functions
+void * state_main(void * args);
+void update_status(agent_status_t status);
+void update_keepalive(time_t curr_time);
+void update_ack(time_t curr_time);
+
 /*** Global variables ***/
 
 /* Global variables. Only modified during startup. */
@@ -86,5 +117,6 @@ extern time_t available_server;
 extern int run_foreground;
 extern keystore keys;
 extern agent *agt;
+extern agent_state_t agent_state;
 
 #endif /* __AGENTD_H */

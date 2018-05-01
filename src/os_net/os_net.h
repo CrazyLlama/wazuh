@@ -14,12 +14,7 @@
 
 #ifndef __OS_NET_H
 #define __OS_NET_H
-#if defined(_WIN32) || defined(__sun__)
-#include <stdint.h>
-typedef uint8_t u_int8_t;
-typedef uint16_t u_int16_t;
-typedef uint32_t u_int32_t;
-#endif
+
 /* OS_Bindport*
  * Bind a specific port (protocol and a ip).
  * If the IP is not set, it is going to use ADDR_ANY
@@ -81,8 +76,18 @@ char *OS_GetHost(const char *host, unsigned int attempts);
 int OS_CloseSocket(int socket);
 
 /* Set the receiving timeout for a socket
- * Returns 0 on succes, else -1
+ * Returns 0 on success, else -1
  */
 int OS_SetRecvTimeout(int socket, int seconds);
+
+/* Send secure TCP message
+ * This function prepends a header containing message size as 4-byte little-endian unsigned integer.
+ * Return 0 on success or OS_SOCKTERR on error.
+ */
+int OS_SendSecureTCP(int sock, uint32_t size, const void * msg);
+
+// Byte ordering
+
+uint32_t wnet_order(uint32_t value);
 
 #endif /* __OS_NET_H */

@@ -21,9 +21,9 @@ system="Sistema"
 user="User"
 host="Host"
 hitanyorabort="Premi ENTER per continuare o Ctrl-C per abbandonare."
-whattoinstall="Che tipo di installazione vuoi fare (server, agent, local o help)?"
-serverchose="Scelta installazione Server"
-clientchose="Scelta installazione Agent(client)"
+whattoinstall="Che tipo di installazione vuoi fare (manager, agent, local o help)?"
+serverchose="Scelta installazione Manager (server)"
+clientchose="Scelta installazione Agent (client)"
 localchose="Scelta installazione Local"
 
 # Part 2
@@ -83,8 +83,16 @@ yessyslog="Syslog remoto attivato"
 # Part 3.4/3.5
 readlogs="Imposto la configurazione per l'analisi dei seguenti logs:"
 
-# Part 5
+# Part 3.7
+runauthd="Vuoi eseguire il servizio Auth?"
+norunauthd="Non eseguire l'autenticazione"
+yesrunauthd="Running Auth servizio"
+
+# Part 4
 installing="Installo il sistema"
+startwazuh="Vuoi iniziare Wazuh dopo l'installazione?"
+nowazuhstart="Wazuh non inizierà alla fine dell'installazione."
+yeswazuhstart="Wazuh inizierà alla fine dell'installazione."
 runningmake="Eseguo il Makefile"
 
 # Final
@@ -108,7 +116,11 @@ update_rev_newconf1="Backup dal ossec.conf è stato creato nel file $INSTALLDIR/
 update_rev_newconf2="Si prega di verificare la configurazione da ossec.conf a $INSTALLDIR/etc/ossec.conf."
 
 # Pf support
-pfenable="Do you want to use the PF firewall in the active response?"
-nopf="PF response disabled."
-pftablename="Name of the PF table to use?"
-pfmessage="Add the following lines to the beginning of your rules"
+pfenable="Vuoi utilizzare il firewall PF nella risposta attiva?"
+nopf="La risposta PF è disattivata."
+pftablename="Nome della tabella PF da utilizzare?"
+pfmessage="Aggiungi le seguenti righe all'inizio delle regole"
+
+# CA store
+addcastore="Vuoi aggiungere altri certificati?"
+castore="Inserire il path di un certificato X509 oppure di una cartella di certificati: "

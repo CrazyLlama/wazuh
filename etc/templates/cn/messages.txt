@@ -21,9 +21,9 @@ system="系统类型"
 user="用户"
 host="主机"
 hitanyorabort="按 ENTER 继续或 Ctrl-C 退出."
-whattoinstall="您希望哪一种安装 (server, agent, local or help)?"
-serverchose="选择了 Server 类型的安装"
-clientchose="选择了 Agent(client) 类型的安装"
+whattoinstall="您希望哪一种安装 (manager, agent, local or help)?"
+serverchose="选择了 Manager (server) 类型的安装"
+clientchose="选择了 Agent (client) 类型的安装"
 localchose="选择了 Local 类型的安装"
 
 # Part 2
@@ -84,8 +84,16 @@ yessyslog="远程机器syslog将被接收"
 # Part 3.4/3.5
 readlogs="设置配置文件以分析一下日志:"
 
-# Part 5
+# Part 3.7
+runauthd="你要运行Auth守护进程吗？"
+norunauthd="不运行Auth守护进程"
+yesrunauthd="运行Auth守护进程"
+
+# Part 4
 installing="正在安装系统"
+startwazuh="你想在安装后启动Wazuh吗？"
+nowazuhstart="Wazuh不会在安装结束时开始。"
+yeswazuhstart="Wazuh将在安装结束时开始。"
 runningmake="正在运行Makefile"
 
 # Final
@@ -113,3 +121,7 @@ pfenable="你希望在联动功能中使用 PF 防火墙吗?"
 nopf="PF 防火墙联动被禁止."
 pftablename="请输入希望使用的 PF 表?"
 pfmessage="请将以下几行添加到 PF 规则的前面"
+
+# CA store
+addcastore="您要添加更多證書嗎"
+castore="輸入X509證書或證書文件夾的路徑："

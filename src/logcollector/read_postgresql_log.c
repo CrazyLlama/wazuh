@@ -18,7 +18,7 @@ static void __send_pgsql_msg(int pos, int drop_it, char *buffer)
 {
     mdebug2("Reading PostgreSQL message: '%s'", buffer);
     if (drop_it == 0) {
-        if (SendMSG(logr_queue, buffer, logff[pos].file, POSTGRESQL_MQ) < 0) {
+        if (SendMSGtoSCK(logr_queue, buffer, logff[pos].file, POSTGRESQL_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
             merror(QUEUE_SEND);
             if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                 merror_exit(QUEUE_FATAL, DEFAULTQPATH);
@@ -44,7 +44,7 @@ void *read_postgresql_log(int pos, int *rc, int drop_it)
     *rc = 0;
 
     /* Get new entry */
-    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && lines < maximum_lines) {
+    while (fgets(str, OS_MAXSTR - OS_LOG_HEADER, logff[pos].fp) != NULL && (!maximum_lines || lines < maximum_lines)) {
 
         lines++;
         /* Get buffer size */
@@ -55,7 +55,7 @@ void *read_postgresql_log(int pos, int *rc, int drop_it)
             str_len = sizeof(buffer) - 10;
         }
 
-        /* Get the last occurence of \n */
+        /* Get the last occurrence of \n */
         if ((p = strrchr(str, '\n')) != NULL) {
             *p = '\0';
 

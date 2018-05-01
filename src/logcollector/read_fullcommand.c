@@ -46,7 +46,7 @@ void *read_fullcommand(int pos, int *rc, int drop_it)
     if (n > 0) {
         str[cmd_size + n] = '\0';
 
-        /* Get the last occurence of \n */
+        /* Get the last occurrence of \n */
         if ((p = strrchr(str, '\n')) != NULL) {
             *p = '\0';
         }
@@ -73,9 +73,9 @@ void *read_fullcommand(int pos, int *rc, int drop_it)
 
         /* Send message to queue */
         if (drop_it == 0) {
-            if (SendMSG(logr_queue, strfinal,
+            if (SendMSGtoSCK(logr_queue, strfinal,
                         (NULL != logff[pos].alias) ? logff[pos].alias : logff[pos].command,
-                        LOCALFILE_MQ) < 0) {
+                        LOCALFILE_MQ, logff[pos].target_socket, logff[pos].outformat) < 0) {
                 merror(QUEUE_SEND);
                 if ((logr_queue = StartMQ(DEFAULTQPATH, WRITE)) < 0) {
                     merror_exit(QUEUE_FATAL, DEFAULTQPATH);

@@ -227,3 +227,54 @@ int Read_Rootcheck(XML_NODE node, void *configp, __attribute__((unused)) void *m
     return (0);
 }
 
+int Test_Rootcheck(const char * path){
+    int fail = 0;
+    rkconfig test_rootcheck = { .workdir = 0 };
+
+    if (ReadConfig(CAGENT_CONFIG | CROOTCHECK, path, &test_rootcheck, NULL) < 0) {
+        merror(RCONFIG_ERROR,"Rootcheck", path);
+		fail = 1;
+	}
+
+    Free_Rootcheck(&test_rootcheck);
+
+    if (fail) {
+        return -1;
+    } else {
+        return 0;
+    }
+}
+
+void Free_Rootcheck(rkconfig * config){
+    if (config) {
+        int i;
+        free((char*) config->workdir);
+        free(config->basedir);
+        free(config->rootkit_files);
+        free(config->rootkit_trojans);
+        if (config->unixaudit) {
+            for (i=0; config->unixaudit[i] != NULL; i++) {
+                free(config->unixaudit[i]);
+            }
+            free(config->unixaudit);
+        }
+        if (config->ignore) {
+            for (i=0; config->ignore[i] != NULL; i++) {
+                free(config->ignore[i]);
+            }
+            free(config->ignore);
+        }
+        free(config->winaudit);
+        free(config->winmalware);
+        free(config->winapps);
+        if (config->alert_msg) {
+            for (i=0; config->alert_msg[i] != NULL; i++) {
+                free(config->alert_msg[i]);
+            }
+            free(config->alert_msg);
+        }
+        if (config->fp) {
+            fclose(config->fp);
+        }
+    }
+}

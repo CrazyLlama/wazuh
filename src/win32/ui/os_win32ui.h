@@ -19,7 +19,8 @@
 /* Default values */
 #define CONFIG          "ossec.conf"
 #define LASTCONFIG      "last-ossec.conf"
-#define VERSION_FILE    "VERSION.txt"
+#define VERSION_FILE    "VERSION"
+#define REVISION_FILE   "REVISION"
 #define OSSECLOGS       "ossec.log"
 #define HELPTXT         "help.txt"
 #define SENDER_FILE     "rids\\sender_counter"
@@ -64,7 +65,7 @@ typedef struct _ossec_config {
     char *agentip;
 
     char *version;
-    char *install_date;
+    char *revision;
     char *status;
 } ossec_config;
 

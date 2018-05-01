@@ -1,3 +1,13 @@
+/*
+ * Contributed by Jeremy Rossi (@jrossi)
+ * Maintained by Wazuh Inc.
+ *
+ * This program is a free software; you can redistribute it
+ * and/or modify it under the terms of the GNU General Public
+ * License (version 2) as published by the FSF - Free Software
+ * Foundation.
+ */
+
 #ifndef WIN32
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -58,13 +68,9 @@ void randombytes(void *ptr, size_t length)
 void srandom_init(void)
 {
 #ifndef WIN32
-#ifdef __OpenBSD__
-    srandomdev();
-#else
     unsigned int seed;
     randombytes(&seed, sizeof seed);
     srandom(seed);
-#endif /* !__OpenBSD__ */
 #endif /* !WIN32 */
 }
 

@@ -95,24 +95,27 @@ int OS_AddKey(keystore *keys, const char *id, const char *name, const char *ip, 
     keys->keyentries[keys->keysize]->keyid = keys->keysize;
     keys->keyentries[keys->keysize]->global = 0;
     keys->keyentries[keys->keysize]->fp = NULL;
+    keys->keyentries[keys->keysize]->inode = 0;
+    keys->keyentries[keys->keysize]->sock = -1;
+    w_mutex_init(&keys->keyentries[keys->keysize]->mutex, NULL);
 
     if (keys->flags.rehash_keys) {
         /** Generate final symmetric key **/
 
         /* MD5 from name, id and key */
-        OS_MD5_Str(name, filesum1);
-        OS_MD5_Str(id,  filesum2);
+        OS_MD5_Str(name, -1, filesum1);
+        OS_MD5_Str(id, -1, filesum2);
 
         /* Generate new filesum1 */
         snprintf(_finalstr, sizeof(_finalstr) - 1, "%s%s", filesum1, filesum2);
 
         /* Use just half of the first MD5 (name/id) */
-        OS_MD5_Str(_finalstr, filesum1);
+        OS_MD5_Str(_finalstr, -1, filesum1);
         filesum1[15] = '\0';
         filesum1[16] = '\0';
 
         /* Second md is just the key */
-        OS_MD5_Str(key, filesum2);
+        OS_MD5_Str(key, -1, filesum2);
 
         /* Generate final key */
         snprintf(_finalstr, 49, "%s%s", filesum2, filesum1);
@@ -156,7 +159,7 @@ int OS_CheckKeys()
 }
 
 /* Read the authentication keys */
-void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed)
+void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed, int no_limit)
 {
     FILE *fp;
 
@@ -186,7 +189,9 @@ void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed)
     /* Initialize hashes */
     keys->keyhash_id = OSHash_Create();
     keys->keyhash_ip = OSHash_Create();
-    if (!keys->keyhash_id || !keys->keyhash_ip) {
+    keys->keyhash_sock = OSHash_Create();
+
+    if (!(keys->keyhash_id && keys->keyhash_ip && keys->keyhash_sock)) {
         merror_exit(MEM_ERROR, errno, strerror(errno));
     }
 
@@ -285,7 +290,7 @@ void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed)
         __memclear(id, name, ip, key, KEYSIZE + 1);
 
         /* Check for maximum agent size */
-        if (keys->keysize >= (MAX_AGENTS - 2)) {
+        if ( !no_limit && keys->keysize >= (MAX_AGENTS - 2) ) {
             merror(AG_MAX_ERROR, MAX_AGENTS - 2);
             merror_exit(CONFIG_ERROR, keys_file);
         }
@@ -310,6 +315,7 @@ void OS_ReadKeys(keystore *keys, int rehash_keys, int save_removed)
 
     /* Add additional entry for sender == keysize */
     os_calloc(1, sizeof(keyentry), keys->keyentries[keys->keysize]);
+    w_mutex_init(&keys->keyentries[keys->keysize]->mutex, NULL);
 
     return;
 }
@@ -337,40 +343,38 @@ void OS_FreeKey(keyentry *key) {
         fclose(key->fp);
     }
 
+    pthread_mutex_destroy(&key->mutex);
     free(key);
 }
 
 /* Free the auth keys */
 void OS_FreeKeys(keystore *keys)
 {
-    unsigned int i = 0;
-    unsigned int _keysize = 0;
-    OSHash *hashid;
-    OSHash *haship;
-
-    _keysize = keys->keysize;
-    hashid = keys->keyhash_id;
-    haship = keys->keyhash_ip;
-
-    /* Zero the entries */
-    keys->keysize = 0;
-    keys->keyhash_id = NULL;
-    keys->keyhash_ip = NULL;
+    unsigned int i;
 
     /* Free the hashes */
 
-    if (hashid)
-        OSHash_Free(hashid);
+    if (keys->keyhash_id)
+        OSHash_Free(keys->keyhash_id);
 
-    if (haship)
-        OSHash_Free(haship);
+    if (keys->keyhash_ip)
+        OSHash_Free(keys->keyhash_ip);
 
-    for (i = 0; i <= _keysize; i++) {
+    if (keys->keyhash_sock)
+        OSHash_Free(keys->keyhash_sock);
+
+    for (i = 0; i <= keys->keysize; i++) {
         if (keys->keyentries[i]) {
             OS_FreeKey(keys->keyentries[i]);
             keys->keyentries[i] = NULL;
         }
     }
+
+    /* Zero the entries */
+    keys->keysize = 0;
+    keys->keyhash_id = NULL;
+    keys->keyhash_ip = NULL;
+    keys->keyhash_sock = NULL;
 
     if (keys->removed_keys) {
         for (i = 0; i < keys->removed_keys_size; i++)
@@ -409,7 +413,7 @@ int OS_UpdateKeys(keystore *keys)
         /* Read keys */
         mdebug1("OS_ReadKeys");
         minfo(ENC_READ);
-        OS_ReadKeys(keys, keys->flags.rehash_keys, keys->flags.save_removed);
+        OS_ReadKeys(keys, keys->flags.rehash_keys, keys->flags.save_removed, 0);
 
         mdebug1("OS_StartCounter");
         OS_StartCounter(keys);
@@ -498,15 +502,16 @@ void OS_PassEmptyKeyfile() {
 }
 
 /* Delete a key */
-int OS_DeleteKey(keystore *keys, const char *id) {
+int OS_DeleteKey(keystore *keys, const char *id, int purge) {
     int i = OS_IsAllowedID(keys, id);
+
 
     if (i < 0)
         return -1;
 
     /* Save removed key */
 
-    if (keys->flags.save_removed) {
+    if (keys->flags.save_removed && !purge) {
         char buffer[OS_BUFFER_SIZE + 1];
         keyentry *entry = keys->keyentries[i];
         snprintf(buffer, OS_BUFFER_SIZE, "%s !%s %s %s", entry->id, entry->name, entry->ip->ip, entry->key);
@@ -515,13 +520,19 @@ int OS_DeleteKey(keystore *keys, const char *id) {
 
     OSHash_Delete(keys->keyhash_id, id);
     OSHash_Delete(keys->keyhash_ip, keys->keyentries[i]->ip->ip);
+
+    if (keys->keyentries[i]->sock >= 0) {
+        char strsock[16] = "";
+        snprintf(strsock, sizeof(strsock), "%d", keys->keyentries[i]->sock);
+        OSHash_Delete(keys->keyhash_sock, strsock);
+    }
+
     OS_FreeKey(keys->keyentries[i]);
     keys->keysize--;
 
     if (i < (int)keys->keysize) {
         keys->keyentries[i] = keys->keyentries[keys->keysize];
-        OSHash_Update(keys->keyhash_id, keys->keyentries[i]->id, keys->keyentries[i]);
-        OSHash_Update(keys->keyhash_ip, keys->keyentries[i]->ip->ip, keys->keyentries[i]);
+        keys->keyentries[i]->keyid = i;
     }
 
     keys->keyentries[keys->keysize] = keys->keyentries[keys->keysize + 1];
@@ -532,13 +543,14 @@ int OS_DeleteKey(keystore *keys, const char *id) {
 int OS_WriteKeys(const keystore *keys) {
     unsigned int i;
     File file;
+    char cidr[20];
 
     if (TempFile(&file, isChroot() ? AUTH_FILE : KEYSFILE_PATH, 0) < 0)
         return -1;
 
     for (i = 0; i < keys->keysize; i++) {
         keyentry *entry = keys->keyentries[i];
-        fprintf(file.fp, "%s %s %s %s\n", entry->id, entry->name, entry->ip->ip, entry->key);
+        fprintf(file.fp, "%s %s %s %s\n", entry->id, entry->name, OS_CIDRtoStr(entry->ip, cidr, 20) ? entry->ip->ip : cidr, entry->key);
     }
 
     /* Write saved removed keys */
@@ -565,8 +577,6 @@ keystore* OS_DupKeys(const keystore *keys) {
 
     os_calloc(1, sizeof(keystore), copy);
     os_calloc(keys->keysize + 1, sizeof(keyentry *), copy->keyentries);
-    copy->keyhash_id = NULL;
-    copy->keyhash_ip = NULL;
 
     copy->keysize = keys->keysize;
     copy->file_change = keys->file_change;
@@ -592,9 +602,12 @@ keystore* OS_DupKeys(const keystore *keys) {
         if (keys->keyentries[i]->ip) {
             os_calloc(1, sizeof(os_ip), copy->keyentries[i]->ip);
             copy->keyentries[i]->ip->ip = strdup(keys->keyentries[i]->ip->ip);
+            copy->keyentries[i]->ip->ip_address = keys->keyentries[i]->ip->ip_address;
+            copy->keyentries[i]->ip->netmask = keys->keyentries[i]->ip->netmask;
         }
 
         copy->keyentries[i]->sock = keys->keyentries[i]->sock;
+        copy->keyentries[i]->mutex = keys->keyentries[i]->mutex;
         copy->keyentries[i]->peer_info = keys->keyentries[i]->peer_info;
     }
 
@@ -607,4 +620,28 @@ keystore* OS_DupKeys(const keystore *keys) {
     }
 
     return copy;
+}
+
+// Add socket number into keystore
+int OS_AddSocket(keystore * keys, unsigned int i, int sock) {
+    char strsock[16] = "";
+
+    snprintf(strsock, sizeof(strsock), "%d", sock);
+    keys->keyentries[i]->sock = sock;
+    return OSHash_Add(keys->keyhash_sock, strsock, keys->keyentries[i]);
+}
+
+// Delete socket number from keystore
+int OS_DeleteSocket(keystore * keys, int sock) {
+    char strsock[16] = "";
+    keyentry * entry;
+
+    snprintf(strsock, sizeof(strsock), "%d", sock);
+
+    if (entry = OSHash_Get(keys->keyhash_sock, strsock), entry) {
+        entry->sock = -1;
+        return OSHash_Delete(keys->keyhash_sock, strsock) ? 0 : -1;
+    } else {
+        return -1;
+    }
 }

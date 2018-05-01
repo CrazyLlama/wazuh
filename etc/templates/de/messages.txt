@@ -22,9 +22,9 @@ system="System"
 user="User"
 host="Host"
 hitanyorabort="Drücken Sie eine Taste zum fortfahren oder Ctrl-C zum abbrechen"
-whattoinstall="Welche Art der Installation möchten Sie starten (server,agent,lokal oder hilfe)?"
-serverchose="Server installation ausgewählt"
-clientchose="Agent(client) installation ausgewählt"
+whattoinstall="Welche Art der Installation möchten Sie starten (manager, agent, lokal oder hilfe)?"
+serverchose="Manager (server) installation ausgewählt"
+clientchose="Agent (client) installation ausgewählt"
 localchose="Lokale installation ausgewählt"
 
 # Part 2
@@ -86,8 +86,16 @@ yessyslog="Remote syslog empfang eingeschaltet"
 # Part 3.4/3.5
 readlogs="Die folgenden Log-Files werden analysiert:"
 
-# Part 5
+# Part 3.7
+runauthd="Möchten Sie den Auth-Dienst ausführen?"
+norunauthd="Auth-Dienst wird nicht ausgeführt."
+yesrunauthd="Auth-Dienst ausführen"
+
+# Part 4
 installing="Installiere das System"
+startwazuh="Möchten Sie Wazuh nach der Installation starten?"
+nowazuhstart="Wazuh startet nicht am Ende der Installation."
+yeswazuhstart="Wazuh wird am Ende der Installation starten."
 runningmake="make wird ausgeführt"
 
 # Final
@@ -115,3 +123,7 @@ pfenable="Möchten Sie die PF Firewall für active response benutzen?"
 nopf="active response für PF Firewall ausgeschaltet."
 pftablename="Name der PF Tabelle die benutzt werden soll?"
 pfmessage="Fügen Sie die folgende Zeile am Anfang Ihrer Regeln ein "
+
+# CA store
+addcastore="Möchten Sie weitere Zertifikate hinzufügen?"
+castore="Geben Sie den Pfad zu einem X509-Zertifikat oder einem Zertifikatsordner ein: "

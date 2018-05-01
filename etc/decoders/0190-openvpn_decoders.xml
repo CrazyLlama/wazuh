@@ -6,7 +6,7 @@
 -->
 
 <decoder name="openvpn">
-  <program_name>openvpn</program_name>
+  <program_name>openvpn|ovpn-server</program_name>
 </decoder>
 
 <!--
@@ -31,6 +31,26 @@ May 14 17:49:12 auth openvpn: Sun May 14 17:49:12 2017 200.200.200.200:17777 [ch
   <prematch>\S+:\d+ [</prematch>
   <regex>(\S+):(\d+) [(\S+)]</regex>
   <order>srcip,srcport,srcuser</order>
+</decoder>
+
+<!--
+Sep 24 10:39:30 foo ovpn-server[145]: TLS Error: cannot locate HMAC in incoming packet from [AF_INET6]::ffff:192.168.178.1:50165
+-->
+<decoder name="openvpn-ip-port">
+  <parent>openvpn</parent>
+  <prematch> [AF_INET]| [AF_INET6]</prematch>
+  <regex>](\S+):(\d+)$</regex>
+  <order>srcip,srcport</order>
+</decoder>
+
+<!--
+Aug 30 16:08:29 foo ovpn-server[107]: 192.168.178.1 [admin] Peer Connection Initiated with [AF_INET6]::ffff:192.168.178.1:44902
+-->
+<decoder name="openvpn-ip-user-port">
+  <parent>openvpn</parent>
+  <prematch>\S+ [</prematch>
+  <regex>(\S+) [(\S+)]\.+:(\d+)$</regex>
+  <order>srcip,srcuser,srcport</order>
 </decoder>
 
 <!--

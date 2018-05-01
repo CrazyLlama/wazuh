@@ -465,8 +465,7 @@ void readel(os_el *el, int printit)
                          computer_name,
                          descriptive_msg != NULL ? descriptive_msg : el_string);
 
-                if (SendMSG(logr_queue, final_msg, "WinEvtLog",
-                            LOCALFILE_MQ) < 0) {
+                if (SendMSG(logr_queue, final_msg, "WinEvtLog", LOCALFILE_MQ) < 0) {
                     merror(QUEUE_SEND);
                 }
             }
@@ -540,7 +539,7 @@ void win_read_vista_sec()
         char *key;
         char *desc;
 
-        /* Get the last occurence of \n */
+        /* Get the last occurrence of \n */
         if ((p = strrchr(buf, '\n')) != NULL) {
             *p = '\0';
         }

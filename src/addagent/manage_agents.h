@@ -21,7 +21,7 @@ char *encode_base64(int size, char *src);
 char *read_from_user(void);
 
 /* Add or remove an agent */
-int add_agent(int json_output);
+int add_agent(int json_output, int no_limit);
 int remove_agent(int json_output);
 
 /* Extract or import a key */
@@ -45,6 +45,7 @@ void OS_BackupAgentInfo_ID(const char *id);
 char* OS_CreateBackupDir(const char *id, const char *name, const char *ip, time_t now);
 void OS_AddAgentTimestamp(const char *id, const char *name, const char *ip, time_t now);
 void OS_RemoveAgentTimestamp(const char *id);
+void OS_RemoveAgentGroup(const char *id);
 void FormatID(char *id);
 
 // Connect to Agentd. Returns socket or -1 on error.
@@ -73,14 +74,17 @@ int list_agents(int cmdlist);
 /* Clear a line */
 char *chomp(char *str);
 
+/* Checks if the agent limit has been reached */
+int limitReached();
+
 /* Shared variables */
-extern int restart_necessary;
 extern time_t time1;
 extern time_t time2;
 extern time_t time3;
 extern long int rand1;
 extern long int rand2;
 extern fpos_t fp_pos;
+extern char shost[];
 
 /* Internal defines */
 #define USER_SIZE       514
@@ -110,8 +114,6 @@ extern fpos_t fp_pos;
 #define ADDED           "Added.\n"
 #define ADD_NOT         "Not Adding.\n"
 #define PRESS_ENTER     "** Press ENTER to return to the main menu.\n"
-#define MUST_RESTART    "\n** You must restart Wazuh for your changes" \
-                        " to take effect.\n\n"
 
 /* Add errors */
 #define ADD_ERROR_ID    "\n** ID '%s' already present. They must be unique.\n\n"
@@ -167,7 +169,7 @@ extern fpos_t fp_pos;
                         "Choose your action: I or Q: "
 
 /* WIN32 errors */
-#define CONF_ERROR      "Could not read (%s) (Make sure config exists and executable is running with Administrative priviliges)."
+#define CONF_ERROR      "Could not read (%s) (Make sure config exists and executable is running with Administrative privileges)."
 #define GMF_ERROR       "Could not run GetModuleFileName."
 #define GMF_BUFF_ERROR  "Could not get path because it is too long and was shrunk by (%d) characters with a max of (%d)."
 #define GMF_UNKN_ERROR  "Could not run GetModuleFileName which returned (%ld)."
